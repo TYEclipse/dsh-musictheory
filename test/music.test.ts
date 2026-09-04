@@ -50,8 +50,8 @@ describe('resolveConfig', () => {
 describe('buildMusicTools', () => {
   const tools = buildMusicTools(resolveConfig({}))
 
-  it('exposes all four tools under their canonical names', () => {
-    expect(Object.keys(tools).sort()).toEqual(['chord_build', 'freq_to_note', 'note_info', 'scale_generate'])
+  it('exposes all seven tools under their canonical names', () => {
+    expect(Object.keys(tools).sort()).toEqual(['chord_build', 'freq_to_note', 'interval_build', 'interval_info', 'note_info', 'scale_generate', 'scale_harmonize'])
   })
 })
 

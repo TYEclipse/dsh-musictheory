@@ -340,3 +340,360 @@ export function generateScale(root: ParsedNote, type: string, a4Hz: number): { s
   const scaleName = `${root.letter}${accidentalName(root.accidental)} ${canonical.replaceAll('_', ' ')}`
   return { scaleName, notes, degrees: def.semis.map((_, i) => i + 1), intervals: [...def.intervals] }
 }
+
+/* ===================== interval engine (v0.2.0) ===================== */
+
+/** A canonical interval definition: number (1=unison, 8=octave, ...) and semitone size. */
+export interface IntervalDef {
+  /** Interval number, e.g. 3 for a third, 9 for a compound ninth. */
+  number: number
+  /** Quality: perfect / major / minor / diminished / augmented. */
+  quality: 'P' | 'M' | 'm' | 'd' | 'A'
+  /** Semitone size (always ascending). */
+  semis: number
+}
+
+/** Canonical interval table (name -> definition). */
+export const INTERVALS: Readonly<Record<string, IntervalDef>> = Object.freeze({
+  P1: { number: 1, quality: 'P', semis: 0 },
+  A1: { number: 1, quality: 'A', semis: 1 },
+  d2: { number: 2, quality: 'd', semis: 0 },
+  m2: { number: 2, quality: 'm', semis: 1 },
+  M2: { number: 2, quality: 'M', semis: 2 },
+  A2: { number: 2, quality: 'A', semis: 3 },
+  d3: { number: 3, quality: 'd', semis: 2 },
+  m3: { number: 3, quality: 'm', semis: 3 },
+  M3: { number: 3, quality: 'M', semis: 4 },
+  A3: { number: 3, quality: 'A', semis: 5 },
+  d4: { number: 4, quality: 'd', semis: 4 },
+  P4: { number: 4, quality: 'P', semis: 5 },
+  A4: { number: 4, quality: 'A', semis: 6 },
+  d5: { number: 5, quality: 'd', semis: 6 },
+  P5: { number: 5, quality: 'P', semis: 7 },
+  A5: { number: 5, quality: 'A', semis: 8 },
+  m6: { number: 6, quality: 'm', semis: 8 },
+  M6: { number: 6, quality: 'M', semis: 9 },
+  d7: { number: 7, quality: 'd', semis: 9 },
+  m7: { number: 7, quality: 'm', semis: 10 },
+  M7: { number: 7, quality: 'M', semis: 11 },
+  P8: { number: 8, quality: 'P', semis: 12 },
+  A8: { number: 8, quality: 'A', semis: 13 },
+  m9: { number: 9, quality: 'm', semis: 13 },
+  M9: { number: 9, quality: 'M', semis: 14 },
+  m10: { number: 10, quality: 'm', semis: 15 },
+  M10: { number: 10, quality: 'M', semis: 16 },
+  P11: { number: 11, quality: 'P', semis: 17 },
+  A11: { number: 11, quality: 'A', semis: 18 },
+  d12: { number: 12, quality: 'd', semis: 18 },
+  P12: { number: 12, quality: 'P', semis: 19 },
+  m13: { number: 13, quality: 'm', semis: 20 },
+  M13: { number: 13, quality: 'M', semis: 21 },
+  P15: { number: 15, quality: 'P', semis: 24 },
+})
+
+/** Canonical interval names (schema enum). */
+export const INTERVAL_NAMES: readonly string[] = Object.keys(INTERVALS)
+
+/** Friendly aliases -> canonical interval names. */
+export const INTERVAL_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  unison: 'P1',
+  octave: 'P8',
+  tritone: 'A4',
+  aug4: 'A4',
+  dim5: 'd5',
+  aug5: 'A5',
+  dim7: 'd7',
+  semitone: 'm2',
+  half_step: 'm2',
+  whole_step: 'M2',
+  whole_tone: 'M2',
+  augmented_octave: 'A8',
+})
+
+/** Alias keys (schema enum extension). */
+export const INTERVAL_ALIAS_KEYS: readonly string[] = Object.keys(INTERVAL_ALIASES)
+
+/** Resolve a user-supplied interval name (canonical or alias) to its canonical name. */
+export function resolveIntervalName(name: string): string | null {
+  const trimmed = name.trim()
+  if (INTERVALS[trimmed] !== undefined) return trimmed
+  return INTERVAL_ALIASES[trimmed] ?? null
+}
+
+/** Diatonic semitone size of a simple interval number (1-7). */
+const DIATONIC_SEMIS: Readonly<Record<number, number>> = Object.freeze({
+  1: 0,
+  2: 2,
+  3: 4,
+  4: 5,
+  5: 7,
+  6: 9,
+  7: 11,
+})
+
+/**
+ * Map a pitch deviation (semitones - diatonic semitones) to an interval
+ * quality. Perfect families (1/4/5 and their compounds) use P/A/d;
+ * imperfect families (2/3/6/7) use M/m/A/d. Wider deviations clamp to
+ * AA/dd labels while the exact semitone count is always reported.
+ */
+export function intervalQuality(number: number, delta: number): string {
+  const simple = ((number - 1) % 7) + 1
+  const perfect = simple === 1 || simple === 4 || simple === 5
+  if (perfect) {
+    if (delta >= 2) return 'AA'
+    if (delta === 1) return 'A'
+    if (delta === 0) return 'P'
+    if (delta === -1) return 'd'
+    return 'dd'
+  }
+  if (delta >= 2) return 'AA'
+  if (delta === 1) return 'A'
+  if (delta === 0) return 'M'
+  if (delta === -1) return 'm'
+  if (delta === -2) return 'd'
+  return 'dd'
+}
+
+/** A spelled target note produced by building an interval. */
+export interface IntervalTarget {
+  /** Spelled note name, e.g. "E4", "Ab3", "B#4". */
+  name: string
+  /** MIDI note number. */
+  midi: number
+  /** Canonical interval name as given. */
+  interval: string
+  /** Semitone distance (always positive; direction is separate). */
+  semitones: number
+  /** Travel direction from the root. */
+  direction: 'ascending' | 'descending'
+}
+
+/**
+ * Build the correctly spelled target note of `name` (canonical or alias)
+ * from `root` in the given direction. Returns null for unknown intervals,
+ * unspellable targets or results outside the MIDI range.
+ */
+export function buildIntervalTarget(root: ParsedNote, name: string, direction: 'ascending' | 'descending' = 'ascending'): IntervalTarget | null {
+  const canonical = resolveIntervalName(name)
+  if (canonical === null) return null
+  const def = INTERVALS[canonical]!
+  const descending = direction === 'descending'
+  const letterSteps = (def.number - 1) % 7
+  const li2 = descending ? (root.letterIndex - letterSteps + 7) % 7 : (root.letterIndex + letterSteps) % 7
+  const pc2 = descending ? (((root.pc - def.semis) % 12) + 12) % 12 : (root.pc + def.semis) % 12
+  const midi2 = descending ? root.midi - def.semis : root.midi + def.semis
+  if (midi2 < 0 || midi2 > 127) return null
+  let accidental: number
+  try {
+    accidental = spellOnLetter(pc2, li2)
+  } catch {
+    return null
+  }
+  return {
+    name: formatSpelling(li2, accidental, midi2),
+    midi: midi2,
+    interval: canonical,
+    semitones: def.semis,
+    direction: descending ? 'descending' : 'ascending',
+  }
+}
+
+/** Named interval between two notes. */
+export interface IntervalAnalysis {
+  /** Interval name, e.g. "M3", "d5", "M10", "P1". */
+  name: string
+  /** Absolute semitone distance. */
+  semitones: number
+  /** Travel direction from note1's perspective. */
+  direction: 'ascending' | 'descending' | 'unison'
+  /** Octave count embedded in the interval (0 for simple intervals). */
+  octaves: number
+  /** Octave-reduced simple form, e.g. "M3" for "M10". */
+  simple: string
+  /** True when the interval spans more than an octave. */
+  compound: boolean
+}
+
+/**
+ * Name the interval between two parsed notes. The letter distance between
+ * the spellings decides the number (C->F# is an A4, C->Gb a d5), the
+ * semitone distance decides the quality. Direction is reported separately.
+ */
+export function analyzeInterval(note1: ParsedNote, note2: ParsedNote): IntervalAnalysis {
+  const d = note2.midi - note1.midi
+  const ad = Math.abs(d)
+  if (d === 0 && note1.letterIndex === note2.letterIndex) {
+    return { name: 'P1', semitones: 0, direction: 'unison', octaves: 0, simple: 'P1', compound: false }
+  }
+  let loLetter: number
+  let hiLetter: number
+  let direction: 'ascending' | 'descending'
+  if (d > 0) {
+    loLetter = note1.letterIndex
+    hiLetter = note2.letterIndex
+    direction = 'ascending'
+  } else if (d < 0) {
+    loLetter = note2.letterIndex
+    hiLetter = note1.letterIndex
+    direction = 'descending'
+  } else {
+    // Equal pitch, different letters: use the (octave * 7 + letter) order.
+    const key1 = note1.octave * 7 + note1.letterIndex
+    const key2 = note2.octave * 7 + note2.letterIndex
+    if (key1 < key2) {
+      loLetter = note1.letterIndex
+      hiLetter = note2.letterIndex
+      direction = 'ascending'
+    } else {
+      loLetter = note2.letterIndex
+      hiLetter = note1.letterIndex
+      direction = 'descending'
+    }
+  }
+  const letterSteps = (hiLetter - loLetter + 7) % 7
+  const numberSimple = letterSteps + 1
+  const diatonic = DIATONIC_SEMIS[numberSimple]!
+  const k = Math.max(0, Math.round((ad - diatonic) / 12))
+  const number = numberSimple + 7 * k
+  const delta = ad - (diatonic + 12 * k)
+  const quality = intervalQuality(number, delta)
+  const simple = k === 0 ? `${quality}${number}` : `${intervalQuality(numberSimple, delta)}${numberSimple}`
+  return {
+    name: `${quality}${number}`,
+    semitones: ad,
+    direction,
+    octaves: k,
+    simple,
+    compound: k > 0,
+  }
+}
+
+/* ===================== scale harmonization (v0.2.0) ===================== */
+
+/** A spelled scale note carrying the spelling engine's letter + accidental. */
+export interface SpelledScaleNote {
+  name: string
+  midi: number
+  letterIndex: number
+  accidental: number
+}
+
+/** Spell the notes of a canonical scale on `root` (letters + accidentals resolved). */
+export function spellScaleNotes(root: ParsedNote, canonicalType: string): SpelledScaleNote[] | null {
+  const canonical = resolveScaleType(canonicalType)
+  if (canonical === null) return null
+  const def = SCALE_TABLE[canonical]
+  if (def === undefined) return null
+  return def.semis.map((semi, i) => {
+    const letterIndex = (root.letterIndex + def.letters[i]!) % 7
+    const targetPc = (root.pc + semi) % 12
+    const accidental = spellOnLetter(targetPc, letterIndex)
+    const midi = root.midi + semi
+    return { name: formatSpelling(letterIndex, accidental, midi), midi, letterIndex, accidental }
+  })
+}
+
+/** Scale types that can be harmonized (heptatonic: triads/sevenths stack cleanly). */
+export const HARMONIZABLE_SCALES: readonly string[] = Object.keys(SCALE_TABLE).filter((key) => SCALE_TABLE[key]!.letters.length === 7)
+
+/** One harmonized chord of a scale. */
+export interface HarmonyChord {
+  /** Scale degree, 1-7. */
+  degree: number
+  /** Roman numeral with quality suffix, e.g. "I", "ii", "vii°", "V7", "iiø7". */
+  roman: string
+  /** Triad/seventh quality in plain English. */
+  quality: string
+  /** Spelled note names. */
+  notes: string[]
+  /** MIDI note numbers. */
+  midis: number[]
+}
+
+function triadQuality(s1: number, s2: number): string {
+  if (s1 === 4 && s2 === 7) return 'major'
+  if (s1 === 3 && s2 === 7) return 'minor'
+  if (s1 === 3 && s2 === 6) return 'diminished'
+  if (s1 === 4 && s2 === 8) return 'augmented'
+  return 'other'
+}
+
+function seventhQuality(s: [number, number, number]): string {
+  const [a, b, c] = s
+  if (a === 4 && b === 7 && c === 11) return 'major7'
+  if (a === 3 && b === 7 && c === 10) return 'minor7'
+  if (a === 4 && b === 7 && c === 10) return 'dominant7'
+  if (a === 3 && b === 6 && c === 10) return 'halfDiminished7'
+  if (a === 3 && b === 6 && c === 9) return 'diminished7'
+  if (a === 4 && b === 8 && c === 10) return 'augmented7'
+  if (a === 3 && b === 7 && c === 11) return 'minorMajor7'
+  return 'other'
+}
+
+const ROMAN: readonly string[] = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII']
+
+/** Roman numeral for a scale degree with its quality. */
+export function romanFor(degree: number, quality: string, sevenths: boolean): string {
+  const base = ROMAN[degree] ?? '?'
+  if (sevenths) {
+    switch (quality) {
+      case 'major7': return `${base}maj7`
+      case 'minor7': return `${base.toLowerCase()}7`
+      case 'dominant7': return `${base}7`
+      case 'halfDiminished7': return `${base.toLowerCase()}ø7`
+      case 'diminished7': return `${base.toLowerCase()}°7`
+      case 'augmented7': return `${base}+7`
+      case 'minorMajor7': return `${base.toLowerCase()}(maj7)`
+      default: return `${base.toLowerCase()}?7`
+    }
+  }
+  switch (quality) {
+    case 'major': return base
+    case 'minor': return base.toLowerCase()
+    case 'diminished': return `${base.toLowerCase()}°`
+    case 'augmented': return `${base}+`
+    default: return `${base.toLowerCase()}?`
+  }
+}
+
+/**
+ * Harmonize a heptatonic scale: stack thirds (or sevenths) on every scale
+ * degree with correct spelling (G# major V = D# F## A#, harmonic minor
+ * III is augmented). Returns null for non-heptatonic or unknown types.
+ */
+export function harmonizeScale(root: ParsedNote, canonicalType: string, sevenths = false): { progression: string; harmony: HarmonyChord[] } | null {
+  const scale = spellScaleNotes(root, canonicalType)
+  if (scale === null || scale.length !== 7) return null
+  const count = sevenths ? 4 : 3
+  const harmony: HarmonyChord[] = []
+  for (let degree = 0; degree < 7; degree += 1) {
+    const midis: number[] = []
+    const notes: string[] = []
+    for (let j = 0; j < count; j += 1) {
+      const p = (degree + 2 * j) % 7
+      const bump = Math.floor((degree + 2 * j) / 7)
+      const note = scale[p]!
+      const midi = note.midi + 12 * bump
+      midis.push(midi)
+      notes.push(formatSpelling(note.letterIndex, note.accidental, midi))
+    }
+    const s1 = (((midis[1]! - midis[0]!) % 12) + 12) % 12
+    const s2 = (((midis[2]! - midis[0]!) % 12) + 12) % 12
+    let quality: string
+    if (sevenths) {
+      const s3 = (((midis[3]! - midis[0]!) % 12) + 12) % 12
+      quality = seventhQuality([s1, s2, s3])
+    } else {
+      quality = triadQuality(s1, s2)
+    }
+    harmony.push({
+      degree: degree + 1,
+      roman: romanFor(degree, quality, sevenths),
+      quality,
+      notes,
+      midis,
+    })
+  }
+  return { progression: harmony.map((h) => h.roman).join(' '), harmony }
+}

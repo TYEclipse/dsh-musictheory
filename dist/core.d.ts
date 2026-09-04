@@ -100,4 +100,105 @@ export declare function generateScale(root: ParsedNote, type: string, a4Hz: numb
     degrees: number[];
     intervals: string[];
 } | null;
+/** A canonical interval definition: number (1=unison, 8=octave, ...) and semitone size. */
+export interface IntervalDef {
+    /** Interval number, e.g. 3 for a third, 9 for a compound ninth. */
+    number: number;
+    /** Quality: perfect / major / minor / diminished / augmented. */
+    quality: 'P' | 'M' | 'm' | 'd' | 'A';
+    /** Semitone size (always ascending). */
+    semis: number;
+}
+/** Canonical interval table (name -> definition). */
+export declare const INTERVALS: Readonly<Record<string, IntervalDef>>;
+/** Canonical interval names (schema enum). */
+export declare const INTERVAL_NAMES: readonly string[];
+/** Friendly aliases -> canonical interval names. */
+export declare const INTERVAL_ALIASES: Readonly<Record<string, string>>;
+/** Alias keys (schema enum extension). */
+export declare const INTERVAL_ALIAS_KEYS: readonly string[];
+/** Resolve a user-supplied interval name (canonical or alias) to its canonical name. */
+export declare function resolveIntervalName(name: string): string | null;
+/**
+ * Map a pitch deviation (semitones - diatonic semitones) to an interval
+ * quality. Perfect families (1/4/5 and their compounds) use P/A/d;
+ * imperfect families (2/3/6/7) use M/m/A/d. Wider deviations clamp to
+ * AA/dd labels while the exact semitone count is always reported.
+ */
+export declare function intervalQuality(number: number, delta: number): string;
+/** A spelled target note produced by building an interval. */
+export interface IntervalTarget {
+    /** Spelled note name, e.g. "E4", "Ab3", "B#4". */
+    name: string;
+    /** MIDI note number. */
+    midi: number;
+    /** Canonical interval name as given. */
+    interval: string;
+    /** Semitone distance (always positive; direction is separate). */
+    semitones: number;
+    /** Travel direction from the root. */
+    direction: 'ascending' | 'descending';
+}
+/**
+ * Build the correctly spelled target note of `name` (canonical or alias)
+ * from `root` in the given direction. Returns null for unknown intervals,
+ * unspellable targets or results outside the MIDI range.
+ */
+export declare function buildIntervalTarget(root: ParsedNote, name: string, direction?: 'ascending' | 'descending'): IntervalTarget | null;
+/** Named interval between two notes. */
+export interface IntervalAnalysis {
+    /** Interval name, e.g. "M3", "d5", "M10", "P1". */
+    name: string;
+    /** Absolute semitone distance. */
+    semitones: number;
+    /** Travel direction from note1's perspective. */
+    direction: 'ascending' | 'descending' | 'unison';
+    /** Octave count embedded in the interval (0 for simple intervals). */
+    octaves: number;
+    /** Octave-reduced simple form, e.g. "M3" for "M10". */
+    simple: string;
+    /** True when the interval spans more than an octave. */
+    compound: boolean;
+}
+/**
+ * Name the interval between two parsed notes. The letter distance between
+ * the spellings decides the number (C->F# is an A4, C->Gb a d5), the
+ * semitone distance decides the quality. Direction is reported separately.
+ */
+export declare function analyzeInterval(note1: ParsedNote, note2: ParsedNote): IntervalAnalysis;
+/** A spelled scale note carrying the spelling engine's letter + accidental. */
+export interface SpelledScaleNote {
+    name: string;
+    midi: number;
+    letterIndex: number;
+    accidental: number;
+}
+/** Spell the notes of a canonical scale on `root` (letters + accidentals resolved). */
+export declare function spellScaleNotes(root: ParsedNote, canonicalType: string): SpelledScaleNote[] | null;
+/** Scale types that can be harmonized (heptatonic: triads/sevenths stack cleanly). */
+export declare const HARMONIZABLE_SCALES: readonly string[];
+/** One harmonized chord of a scale. */
+export interface HarmonyChord {
+    /** Scale degree, 1-7. */
+    degree: number;
+    /** Roman numeral with quality suffix, e.g. "I", "ii", "vii°", "V7", "iiø7". */
+    roman: string;
+    /** Triad/seventh quality in plain English. */
+    quality: string;
+    /** Spelled note names. */
+    notes: string[];
+    /** MIDI note numbers. */
+    midis: number[];
+}
+/** Roman numeral for a scale degree with its quality. */
+export declare function romanFor(degree: number, quality: string, sevenths: boolean): string;
+/**
+ * Harmonize a heptatonic scale: stack thirds (or sevenths) on every scale
+ * degree with correct spelling (G# major V = D# F## A#, harmonic minor
+ * III is augmented). Returns null for non-heptatonic or unknown types.
+ */
+export declare function harmonizeScale(root: ParsedNote, canonicalType: string, sevenths?: boolean): {
+    progression: string;
+    harmony: HarmonyChord[];
+} | null;
 //# sourceMappingURL=core.d.ts.map

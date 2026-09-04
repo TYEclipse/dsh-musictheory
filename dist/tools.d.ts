@@ -6,13 +6,16 @@
  * @module dsh-musictheory/tools
  */
 import { type ToolDefinition } from '@deepseek-ai/dsh-tools';
-import { type NoteData } from './core.ts';
+import { type HarmonyChord, type NoteData } from './core.ts';
 import type { ResolvedConfig } from './index.ts';
 export interface ToolSet {
     note_info: ToolDefinition;
     freq_to_note: ToolDefinition;
     chord_build: ToolDefinition;
     scale_generate: ToolDefinition;
+    interval_build: ToolDefinition;
+    interval_info: ToolDefinition;
+    scale_harmonize: ToolDefinition;
 }
 export interface NoteInfoResult {
     valid: boolean;
@@ -49,6 +52,34 @@ export interface ScaleResult {
     intervals?: string[];
     error?: string;
 }
-/** Build all four tool definitions from the resolved config. */
+export interface IntervalBuildResult {
+    valid: boolean;
+    targetNote?: string;
+    midi?: number;
+    frequencyHz?: number;
+    interval?: string;
+    semitones?: number;
+    direction?: 'ascending' | 'descending';
+    error?: string;
+}
+export interface IntervalInfoResult {
+    valid: boolean;
+    name?: string;
+    semitones?: number;
+    direction?: 'ascending' | 'descending' | 'unison';
+    octaves?: number;
+    simple?: string;
+    compound?: boolean;
+    error?: string;
+}
+export interface ScaleHarmonyResult {
+    valid: boolean;
+    scaleName?: string;
+    progression?: string;
+    sevenths?: boolean;
+    harmony?: HarmonyChord[];
+    error?: string;
+}
+/** Build all seven tool definitions from the resolved config. */
 export declare function buildMusicTools(config: ResolvedConfig): ToolSet;
 //# sourceMappingURL=tools.d.ts.map

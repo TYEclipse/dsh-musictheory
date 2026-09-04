@@ -1,11 +1,14 @@
 /**
  * dsh-musictheory — deterministic music theory math for DeepSeek Harness.
  *
- * Four zero-dependency tools (pure 12-TET arithmetic):
+ * Seven zero-dependency tools (pure 12-TET arithmetic):
  *   note_info       — parse a note name into MIDI / octave / pitch class / frequency + enharmonics
  *   freq_to_note    — frequency in Hz -> nearest note, cents deviation and spellings
  *   chord_build     — correctly spelled chords for 26 qualities (G# major is G# B# D#)
  *   scale_generate  — correctly spelled scales for 17 types (F# major is F# G# A# B C# D# E#)
+ *   interval_build  — build the spelled target note of an interval up/down (G# + M3 = B#)
+ *   interval_info   — name the interval between two notes (C->F# = A4, C->Gb = d5)
+ *   scale_harmonize — diatonic triads/seventh chords of a scale (C major: I ii iii IV V vi vii°)
  *
  * Agents get music theory wrong in predictable ways: wrong frequencies, wrong
  * sharp/flat counts, and enharmonic mistakes (writing G# C D# for G# major).

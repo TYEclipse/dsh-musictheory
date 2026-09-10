@@ -1,6 +1,6 @@
 {
   "name": "dsh-musictheory",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Music theory math toolbox for DeepSeek Harness (dsh): note parsing, frequency/MIDI conversion, correctly spelled chords (26 qualities) and scales (17 types) — zero runtime dependencies",
   "type": "module",
   "main": "dist/index.js",

@@ -1,13 +1,15 @@
 /**
- * Tool definitions for dsh-musictheory: four deterministic music-theory tools
+ * Tool definitions for dsh-musictheory: nine deterministic music-theory tools
  * exposed to every agent via defineTool. Strict JSON-schema parameter surfaces,
  * explicit result interfaces matching the inferred output types.
  *
  * @module dsh-musictheory/tools
  */
 import { type ToolDefinition } from '@deepseek-ai/dsh-tools';
-import { type HarmonyChord, type NoteData } from './core.ts';
+import { type ChordCandidate, type HarmonyChord, type NoteData } from './core.ts';
 import type { ResolvedConfig } from './index.ts';
+/** How many chord readings `chord_identify` returns before it truncates. */
+export declare const CANDIDATE_LIMIT = 12;
 export interface ToolSet {
     note_info: ToolDefinition;
     freq_to_note: ToolDefinition;
@@ -16,6 +18,8 @@ export interface ToolSet {
     interval_build: ToolDefinition;
     interval_info: ToolDefinition;
     scale_harmonize: ToolDefinition;
+    transpose: ToolDefinition;
+    chord_identify: ToolDefinition;
 }
 export interface NoteInfoResult {
     valid: boolean;
@@ -78,6 +82,33 @@ export interface ScaleHarmonyResult {
     progression?: string;
     sevenths?: boolean;
     harmony?: HarmonyChord[];
+    error?: string;
+}
+/** One transposed note (input spelling -> spelled target). */
+export interface TransposedNote {
+    from: string;
+    to: string;
+    midi: number;
+    frequencyHz: number;
+}
+export interface TransposeResult {
+    valid: boolean;
+    interval?: string;
+    semitones?: number;
+    direction?: 'ascending' | 'descending';
+    notes?: TransposedNote[];
+    error?: string;
+}
+export interface ChordIdentifyResult {
+    valid: boolean;
+    notes?: string[];
+    bass?: string;
+    pitchClasses?: number[];
+    mode?: 'exact' | 'incomplete';
+    best?: ChordCandidate;
+    candidates?: ChordCandidate[];
+    total?: number;
+    truncated?: boolean;
     error?: string;
 }
 /** Build all seven tool definitions from the resolved config. */

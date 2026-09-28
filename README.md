@@ -2,7 +2,7 @@
 
 Deterministic music theory math for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) — zero runtime dependencies, pure 12-TET arithmetic.
 
-**中文简介**：音乐理论数学工具箱——解析音名、频率与 MIDI 互转、26 种和弦与 17 种音阶的正确拼写（G# 大三和弦是 G# B# D# 而非 G# C D#）、音程构建与识别（C→F# 是增四度、C→Gb 是减五度）、音阶和声化（C 大调三和弦 I ii iii IV V vi vii°）。零运行时依赖、纯确定计算，专治大模型手算音高/升降号/同音异名的高频错误。
+**中文简介**：音乐理论数学工具箱——解析音名、频率与 MIDI 互转、26 种和弦与 17 种音阶的正确拼写（G# 大三和弦是 G# B# D# 而非 G# C D#）、音程构建与识别（C→F# 是增四度、C→Gb 是减五度）、音阶和声化（C 大调三和弦 I ii iii IV V vi vii°）、拼写感知移调（G# 上移大三度 = B#）、按音级集合识别和弦（E G C = Cmaj/E 第一转位；C E G A 同时是 C6 与 Am7/C）。零运行时依赖、纯确定计算，专治大模型手算音高/升降号/同音异名的高频错误。
 
 ## Why
 
@@ -26,6 +26,8 @@ These tools replace all of that with deterministic tables and a spelling engine.
 | `interval_build` | Build the correctly spelled target note of an interval, up or down: `C + M3 = E`, `G# + M3 = B#` (not C!), `C down a d5 = F#`. 34 canonical names (`M3`, `P5`, `m7`, `A4`, `d5`, `M9`, `P15` …) plus aliases (`tritone`, `octave`, `semitone`, `whole_tone`). |
 | `interval_info` | Name the interval between two notes. The letter distance decides the number (`C→F#` = augmented 4th, `C→Gb` = diminished 5th), the semitone count decides the quality, direction and compound structure (`C4→D5` = M9 = M2 + 1 octave) are reported separately. |
 | `scale_harmonize` | Harmonize a 7-note scale: diatonic triads on every degree with roman numerals, qualities and correct spellings (`C major` → `I ii iii IV V vi vii°`, harmonic minor III is augmented). `sevenths: true` gives seventh chords (`Imaj7 ii7 iii7 IVmaj7 V7 vi7 viiø7`). |
+| `transpose` | Transpose 1-16 notes by any interval, spelling-aware and in both directions: `Bb3 G3 D4` up a M2 → `C4 A3 E4`, `C#4 E#4 G#4` down a m3 → `A#3 C##4 E#4`, `F#4` down a P4 → `C#4`. Canonical intervals (`M3`, `P5`, `m7`, `M9`, `P15`) plus aliases (`tritone`, `octave`, `whole_tone`). Use it for instrument transpositions (Bb trumpet +M2, Eb alto sax +M6) and key changes. |
+| `chord_identify` | Identifies the chord behind 2-8 played notes: `C E G` → `Cmaj`; `E G C` (bass E) → `Cmaj/E`, first inversion; `C E G A` → **both** `C6` and `Am7/C`; `C Eb Gb Bbb` → all four dim7 rotations; a chord written on `B#` stays on `B#`. Voicings that omit one or two chord tones are matched too (`C E Bb D` → `C9` with `missing: ["5"]`, `exact: false`). |
 
 ## Install
 
@@ -33,7 +35,7 @@ These tools replace all of that with deterministic tables and a spelling engine.
 dsh plugin --profile <profile-name> add github:TYEclipse/dsh-musictheory
 ```
 
-(Install from the npm-style git URL, or pin a release: `add github:TYEclipse/dsh-musictheory#v0.2.0`.)
+(Install from the npm-style git URL, or pin a release: `add github:TYEclipse/dsh-musictheory#v0.3.0`.)
 
 ## Examples
 
@@ -50,7 +52,21 @@ interval_info  note1="C4" note2="F#4" → A4, 6 semitones, ascending
 interval_info  note1="C4" note2="D5"  → M9, 14 semitones (compound: M2 + 1 octave)
 scale_harmonize  root="C" type="major" → I ii iii IV V vi vii°
 scale_harmonize  root="A" type="harmonic_minor" → III+ = C5 E5 G#5 (augmented)
+transpose  notes=["Bb3","G3","D4"] interval="M2" → C4 A3 E4 (Bb instrument reading concert pitch)
+transpose  notes=["C#4","E#4","G#4"] interval="m3" direction="descending" → A#3 C##4 E#4
+chord_identify  notes=["E4","G4","C5"] → Cmaj/E (maj, inversion 1)
+chord_identify  notes=["C4","E4","G4","A4"] → C6, then "other readings: Am7/C"
+chord_identify  notes=["C4","E4","Bb4","D5"] → C9 (exact: false, missing ["5"])
 ```
+
+### How `chord_identify` ranks
+
+Every reading of the played pitch classes is scored as
+`2 × inversion + quality weight + 3 × missing tones` (a quality weight of 0 for
+`maj`/`min`/`dim`/`maj7`/`m7`/`7` up to 4 for the extended colours), then sorted
+by root position, table order, root pitch class and inversion. Ties such as
+`C6` vs. `Am7/C` are returned in the order a musician would read them, best
+first, and `total` reports how many readings exist before the 12-candidate cap.
 
 ## How the spelling works
 
@@ -75,11 +91,13 @@ orchestra **442** Hz. Frequencies follow the 12-TET formula `a4 · 2^((midi−69
 - **Zero runtime dependencies** — pure arithmetic, no network, no shell, no filesystem access.
 - Deterministic: same input always gives the same output; no approximation of note names.
 - Inputs are validated (malformed notes / non-positive frequencies / unknown qualities return structured errors).
-- 100 unit tests, anchored on independently computed 12-TET values (`independent anchors scripts`) and public references (A4=440 Hz ISO 16, MIDI C4=60, C major diatonic triads, harmonic minor augmented III).
+- 123 unit tests, anchored on an independent Python oracle committed with the source
+  (`test/oracle/anchors.py`, printed values for every numeric expectation; re-check the
+  public facts with `python3 test/oracle/anchors.py --check`) and on public references
+  (A4=440 Hz ISO 16, MIDI C4=60, C major diatonic triads, harmonic minor augmented III).
 
 ## Roadmap
 
-- `transpose` — spelling-aware transposition by interval/key (coming in a future release)
 - Interval inversion & more compound intervals
 - More chord qualities & scale types on request — open an issue!
 

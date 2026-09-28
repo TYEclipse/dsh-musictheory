@@ -201,4 +201,72 @@ export declare function harmonizeScale(root: ParsedNote, canonicalType: string, 
     progression: string;
     harmony: HarmonyChord[];
 } | null;
+/** Canonical spelling of a parsed note (letter + accidental + octave). */
+export declare function noteName(note: ParsedNote): string;
+/** Pitch-class set of one chord quality (mod 12, ascending, deduplicated). */
+export declare function chordPitchClasses(quality: string): number[] | null;
+/**
+ * Chord qualities indexed by their sorted pitch-class set (table order kept),
+ * e.g. "0,2,4,7,9" -> ["6/9"]. Harmonic qualities that differ only by octave
+ * placement (add9 vs. 6/9) share one entry — the ranking then decides.
+ */
+export declare const CHORD_PC_INDEX: Readonly<Record<string, readonly string[]>>;
+/**
+ * How common a chord quality is — the tie-breaker of the identification
+ * ranking (lower = more common). Unknown qualities fall back to 4.
+ */
+export declare const QUALITY_WEIGHTS: Readonly<Record<string, number>>;
+/** One chord reading of a set of played notes. */
+export interface ChordCandidate {
+    /** Root spelled as written in the input (e.g. "B#", "Gb"). */
+    root: string;
+    /** Chord quality key (one of `CHORD_QUALITIES`). */
+    quality: string;
+    /** Root + quality, e.g. "C#maj". */
+    symbol: string;
+    /** Interval labels of the chord (e.g. ["1","3","b7"]). */
+    intervals: string[];
+    /** Which chord tone is in the bass (0 = root position). */
+    inversion: number;
+    /** Bass note spelled as written in the input. */
+    bass: string;
+    /** Slash notation, e.g. "Cmaj/E" (equals `symbol` in root position). */
+    slashSymbol: string;
+    /** True when the bass is the root. */
+    rootPosition: boolean;
+    /** True for a complete match; false when chord tones are simply not played. */
+    exact: boolean;
+    /** Interval labels of chord tones that are not played (absent when `exact`). */
+    missing?: string[];
+    /** Ranking score: `2 * inversion + quality weight + 3 * missing tones` (lower is better). */
+    score: number;
+}
+/** Result of identifying the chord(s) behind a set of notes. */
+export interface ChordIdentification {
+    /** Bass note spelled as written in the input. */
+    bass: string;
+    /** `exact` when the pitch classes equal a chord's; `incomplete` for reduced voicings. */
+    mode: 'exact' | 'incomplete';
+    /** Candidates, best first (see the ranking rule on `score`). */
+    candidates: ChordCandidate[];
+    /** Number of candidates found before the result cap. */
+    total: number;
+}
+/**
+ * Identify the chord(s) behind a set of played notes.
+ *
+ * Pass 1 (mode `exact`) matches the whole pitch-class set against the chord
+ * table, so every conventional quality is found — the classic C-E-G-A
+ * ambiguity comes back as both C6 and Am7. Pass 2 (mode `incomplete`, only
+ * when pass 1 finds nothing and at least three distinct pitch classes are
+ * played) accepts voicings that simply omit one or two chord tones (C-E-Bb-D
+ * is a C9 without the fifth); the root must be played, so rootless voicings
+ * are not guessed at.
+ *
+ * Ranking: `2 * inversion + quality weight + 3 * missing tones`, then
+ * root position first, then table order, then root pitch class, then
+ * inversion. Returns null when fewer than two distinct pitch classes are
+ * played (nothing can be identified from one pitch).
+ */
+export declare function identifyChord(notes: ParsedNote[], limit?: number): ChordIdentification | null;
 //# sourceMappingURL=core.d.ts.map

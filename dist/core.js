@@ -591,4 +591,138 @@ export function harmonizeScale(root, canonicalType, sevenths = false) {
     }
     return { progression: harmony.map((h) => h.roman).join(' '), harmony };
 }
+/* ===================== chord identification (v0.3.0) ===================== */
+/** Canonical spelling of a parsed note (letter + accidental + octave). */
+export function noteName(note) {
+    return formatSpelling(note.letterIndex, note.accidental, note.midi);
+}
+/** Pitch class of a semitone offset, normalized to 0-11. */
+function pitchClassOf(semi) {
+    return ((semi % 12) + 12) % 12;
+}
+/** Pitch-class set of one chord quality (mod 12, ascending, deduplicated). */
+export function chordPitchClasses(quality) {
+    const def = CHORDS[quality];
+    if (def === undefined)
+        return null;
+    return [...new Set(def.semis.map(pitchClassOf))].sort((a, b) => a - b);
+}
+/**
+ * Chord qualities indexed by their sorted pitch-class set (table order kept),
+ * e.g. "0,2,4,7,9" -> ["6/9"]. Harmonic qualities that differ only by octave
+ * placement (add9 vs. 6/9) share one entry — the ranking then decides.
+ */
+export const CHORD_PC_INDEX = (() => {
+    const index = {};
+    for (const quality of CHORD_QUALITIES) {
+        const key = chordPitchClasses(quality).join(',');
+        const bucket = index[key] ?? (index[key] = []);
+        bucket.push(quality);
+    }
+    return Object.freeze(index);
+})();
+/**
+ * How common a chord quality is — the tie-breaker of the identification
+ * ranking (lower = more common). Unknown qualities fall back to 4.
+ */
+export const QUALITY_WEIGHTS = Object.freeze({
+    maj: 0, min: 0, dim: 0, maj7: 0, m7: 0, 7: 0,
+    m7b5: 1, dim7: 1, sus2: 1, sus4: 1,
+    6: 2, m6: 2, 5: 2,
+    aug: 3, aug7: 3, '7sus4': 3, add9: 3, madd9: 3,
+    maj9: 4, 9: 4, m9: 4, 11: 4, m11: 4, 13: 4, maj13: 4, '6/9': 4,
+});
+/**
+ * Identify the chord(s) behind a set of played notes.
+ *
+ * Pass 1 (mode `exact`) matches the whole pitch-class set against the chord
+ * table, so every conventional quality is found — the classic C-E-G-A
+ * ambiguity comes back as both C6 and Am7. Pass 2 (mode `incomplete`, only
+ * when pass 1 finds nothing and at least three distinct pitch classes are
+ * played) accepts voicings that simply omit one or two chord tones (C-E-Bb-D
+ * is a C9 without the fifth); the root must be played, so rootless voicings
+ * are not guessed at.
+ *
+ * Ranking: `2 * inversion + quality weight + 3 * missing tones`, then
+ * root position first, then table order, then root pitch class, then
+ * inversion. Returns null when fewer than two distinct pitch classes are
+ * played (nothing can be identified from one pitch).
+ */
+export function identifyChord(notes, limit = 12) {
+    const written = new Map();
+    for (const note of notes) {
+        if (!written.has(note.pc))
+            written.set(note.pc, `${note.letter}${accidentalName(note.accidental)}`);
+    }
+    const pcs = [...written.keys()].sort((a, b) => a - b);
+    if (pcs.length < 2)
+        return null;
+    const lowest = notes.reduce((a, b) => (b.midi < a.midi ? b : a));
+    const bassPc = lowest.pc;
+    const bass = written.get(bassPc);
+    const make = (rootPc, quality, missing) => {
+        const def = CHORDS[quality];
+        const seq = chordPitchClasses(quality);
+        const rel = pitchClassOf(bassPc - rootPc);
+        const index = seq.indexOf(rel);
+        const inversion = index < 0 ? 0 : index;
+        const root = written.get(rootPc);
+        const symbol = `${root}${quality}`;
+        const exact = missing.length === 0;
+        const candidate = {
+            root,
+            quality,
+            symbol,
+            intervals: [...def.intervals],
+            inversion,
+            bass,
+            slashSymbol: inversion === 0 ? symbol : `${symbol}/${bass}`,
+            rootPosition: inversion === 0,
+            exact,
+            score: 2 * inversion + (QUALITY_WEIGHTS[quality] ?? 4) + 3 * missing.length,
+        };
+        if (!exact)
+            candidate.missing = [...missing];
+        return { candidate, rootPc, tableIndex: CHORD_QUALITIES.indexOf(quality) };
+    };
+    const found = [];
+    for (const rootPc of pcs) {
+        const key = pcs.map((pc) => pitchClassOf(pc - rootPc)).sort((a, b) => a - b).join(',');
+        for (const quality of CHORD_PC_INDEX[key] ?? [])
+            found.push(make(rootPc, quality, []));
+    }
+    let mode = 'exact';
+    if (found.length === 0 && pcs.length >= 3) {
+        mode = 'incomplete';
+        for (const rootPc of pcs) {
+            const rel = new Set(pcs.map((pc) => pitchClassOf(pc - rootPc)));
+            for (const quality of CHORD_QUALITIES) {
+                const tones = new Set(chordPitchClasses(quality));
+                let extra = false;
+                for (const pc of rel) {
+                    if (!tones.has(pc)) {
+                        extra = true;
+                        break;
+                    }
+                }
+                if (extra)
+                    continue; // every played pitch class must be a chord tone
+                const def = CHORDS[quality];
+                const missing = [];
+                def.intervals.forEach((label, i) => {
+                    if (!rel.has(pitchClassOf(def.semis[i])))
+                        missing.push(label);
+                });
+                if (missing.length >= 1 && missing.length <= 2)
+                    found.push(make(rootPc, quality, missing));
+            }
+        }
+    }
+    found.sort((a, b) => a.candidate.score - b.candidate.score
+        || Number(b.candidate.rootPosition) - Number(a.candidate.rootPosition)
+        || a.tableIndex - b.tableIndex
+        || a.rootPc - b.rootPc
+        || a.candidate.inversion - b.candidate.inversion);
+    return { bass, mode, candidates: found.slice(0, Math.max(1, limit)).map((r) => r.candidate), total: found.length };
+}
 //# sourceMappingURL=core.js.map

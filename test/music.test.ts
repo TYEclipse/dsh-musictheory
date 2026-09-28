@@ -1,11 +1,13 @@
 /**
  * Tests for dsh-musictheory core math and tool assembly.
  *
- * Anchor values come from the independent closed-form script
- * an independent anchors script (12-TET definitions), cross-checked
- * against public references (A4=440 Hz, C4=261.6255653 Hz, MIDI C4=60).
- * The spelling cases are hand-verified music theory (G# major = G# B# D#,
- * F# major = F# G# A# B C# D# E#).
+ * ORACLE: test/oracle/anchors.py
+ *
+ * Anchor values are printed by that committed script (section `legacy anchors`),
+ * which re-derives them from an independent Python implementation of the 12-TET
+ * formula and the note parser, cross-checked against public references
+ * (A4=440 Hz, C4=261.6255653 Hz, MIDI C4=60). The spelling cases are
+ * hand-verified music theory (G# major = G# B# D#, F# major = F# G# A# B C# D# E#).
  */
 
 import { describe, expect, it } from 'vitest'
@@ -50,8 +52,8 @@ describe('resolveConfig', () => {
 describe('buildMusicTools', () => {
   const tools = buildMusicTools(resolveConfig({}))
 
-  it('exposes all seven tools under their canonical names', () => {
-    expect(Object.keys(tools).sort()).toEqual(['chord_build', 'freq_to_note', 'interval_build', 'interval_info', 'note_info', 'scale_generate', 'scale_harmonize'])
+  it('exposes all nine tools under their canonical names', () => {
+    expect(Object.keys(tools).sort()).toEqual(['chord_build', 'chord_identify', 'freq_to_note', 'interval_build', 'interval_info', 'note_info', 'scale_generate', 'scale_harmonize', 'transpose'])
   })
 })
 

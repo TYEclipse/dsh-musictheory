@@ -1,5 +1,5 @@
 /**
- * Tool definitions for dsh-musictheory: four deterministic music-theory tools
+ * Tool definitions for dsh-musictheory: nine deterministic music-theory tools
  * exposed to every agent via defineTool. Strict JSON-schema parameter surfaces,
  * explicit result interfaces matching the inferred output types.
  *
@@ -20,17 +20,25 @@ import {
   generateScale,
   harmonizeScale,
   HARMONIZABLE_SCALES,
+  identifyChord,
   INTERVAL_ALIAS_KEYS,
   INTERVAL_NAMES,
+  INTERVALS,
   midiToFrequency,
+  noteName,
   parseNote,
   resolveIntervalName,
   resolveScaleType,
   SCALE_TYPES,
+  type ChordCandidate,
   type HarmonyChord,
   type NoteData,
+  type ParsedNote,
 } from './core.ts'
 import type { ResolvedConfig } from './index.ts'
+
+/** How many chord readings `chord_identify` returns before it truncates. */
+export const CANDIDATE_LIMIT = 12
 
 export interface ToolSet {
   note_info: ToolDefinition
@@ -40,6 +48,8 @@ export interface ToolSet {
   interval_build: ToolDefinition
   interval_info: ToolDefinition
   scale_harmonize: ToolDefinition
+  transpose: ToolDefinition
+  chord_identify: ToolDefinition
 }
 
 export interface NoteInfoResult {
@@ -112,6 +122,36 @@ export interface ScaleHarmonyResult {
   error?: string
 }
 
+/** One transposed note (input spelling -> spelled target). */
+export interface TransposedNote {
+  from: string
+  to: string
+  midi: number
+  frequencyHz: number
+}
+
+export interface TransposeResult {
+  valid: boolean
+  interval?: string
+  semitones?: number
+  direction?: 'ascending' | 'descending'
+  notes?: TransposedNote[]
+  error?: string
+}
+
+export interface ChordIdentifyResult {
+  valid: boolean
+  notes?: string[]
+  bass?: string
+  pitchClasses?: number[]
+  mode?: 'exact' | 'incomplete'
+  best?: ChordCandidate
+  candidates?: ChordCandidate[]
+  total?: number
+  truncated?: boolean
+  error?: string
+}
+
 /** Reject obviously bad A4 references; fall back to the configured default. */
 function validA4(a4Hz: number | undefined, config: ResolvedConfig): number | null {
   if (a4Hz === undefined) return config.a4Hz
@@ -173,6 +213,28 @@ function renderScaleHarmony(value: unknown): string {
   const label = r.sevenths === true ? 'seventh chords' : 'triads'
   const lines = (r.harmony ?? []).map((h) => `  ${h.roman.padEnd(7)} ${h.notes.join(' ')} (${h.quality})`)
   return `${r.scaleName} (${label}): ${r.progression}\n${lines.join('\n')}`
+}
+
+function renderTranspose(value: unknown): string {
+  const r = value as TransposeResult
+  if (!r.valid) return `invalid transpose: ${r.error ?? 'unknown error'}`
+  const arrow = r.direction === 'descending' ? 'down' : 'up'
+  const moves = (r.notes ?? []).map((n) => `${n.from} -> ${n.to}`).join(', ')
+  return `${r.interval} ${arrow} (${r.semitones} semitones): ${moves}`
+}
+
+function renderChordIdentify(value: unknown): string {
+  const r = value as ChordIdentifyResult
+  if (!r.valid) return `cannot identify chord: ${r.error ?? 'unknown error'}`
+  const candidates = r.candidates ?? []
+  if (candidates.length === 0) return `no chord identified: ${r.error ?? 'unknown error'}`
+  const best = r.best!
+  const missing = best.exact ? '' : ` [missing ${(best.missing ?? []).join('/')}]`
+  const head = `${best.slashSymbol}  (${best.quality}${best.rootPosition ? ', root position' : `, inversion ${best.inversion}`})${missing}`
+  const others = candidates.slice(1, 6).map((c) => c.slashSymbol).join(', ')
+  const more = r.truncated === true ? ` (+${r.total! - candidates.length} more)` : ''
+  const tail = others.length === 0 ? '' : `\n  other readings: ${others}${more}`
+  return `${r.notes!.join(' ')} (bass ${r.bass}): ${head}${tail}`
 }
 
 /** Build all seven tool definitions from the resolved config. */
@@ -533,5 +595,156 @@ export function buildMusicTools(config: ResolvedConfig): ToolSet {
     },
   })
 
-  return { note_info, freq_to_note, chord_build, scale_generate, interval_build, interval_info, scale_harmonize }
+  const transpose = defineTool({
+    name: 'transpose',
+    description: 'Transpose one or more notes by a musical interval, with correct spelling; the interval and '
+      + 'direction are applied through the letter ladder (C up a M3 = E, G# up a M3 = B#, Bb3 up a M2 = C4, '
+      + 'F# down a P4 = C#). Use this to move a melody line or a chord into another key, or to spell '
+      + 'instrument transpositions (Bb trumpet up a M2, Eb alto sax up a M6) without doing semitone '
+      + 'arithmetic by hand. Every note comes back spelled, with its MIDI number and exact frequency.',
+    parameters: {
+      notes: { type: 'array', items: { type: 'string' }, required: true, description: '1-16 note names to transpose, e.g. ["Bb3","G3","D4"]. Octaves default to 4 when omitted.' },
+      interval: { type: 'string', enum: [...INTERVAL_NAMES, ...INTERVAL_ALIAS_KEYS], description: 'Interval to transpose by: canonical ("M2", "P5", "m3", "P8", "M9") or alias ("octave", "tritone", "whole_tone"). Default "P5".' },
+      direction: { type: 'string', enum: ['ascending', 'descending'], description: 'Direction of the transposition. Default ascending.' },
+      a4Hz: { type: 'number', description: `A4 reference pitch in Hz (default ${DEFAULT_A4}).` },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          valid: { type: 'boolean', required: true },
+          interval: { type: 'string' },
+          semitones: { type: 'number' },
+          direction: { type: 'string', enum: ['ascending', 'descending'] },
+          notes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                from: { type: 'string', required: true },
+                to: { type: 'string', required: true },
+                midi: { type: 'number', required: true },
+                frequencyHz: { type: 'number', required: true },
+              },
+            },
+          },
+          error: { type: 'string' },
+        },
+      },
+      render: (_args: { notes: string[]; interval?: string; direction?: string }, value: unknown) => [{ type: 'text', text: renderTranspose(value) }],
+    },
+    async execute(args: { notes?: string[]; interval?: string; direction?: string; a4Hz?: number }): Promise<TransposeResult> {
+      const a4 = validA4(args.a4Hz, config)
+      if (a4 === null) return { valid: false, error: A4_ERROR }
+      const names = args.notes ?? []
+      if (names.length === 0) return { valid: false, error: 'notes must contain at least one note name' }
+      if (names.length > 16) return { valid: false, error: `notes must contain at most 16 note names (got ${names.length})` }
+      const asked = args.interval ?? 'P5'
+      const canonical = resolveIntervalName(asked)
+      if (canonical === null) {
+        return { valid: false, error: `unknown interval "${asked}" (use M3/P5/m7/A4/d5 or aliases like tritone/octave/semitone)` }
+      }
+      const direction = args.direction === 'descending' ? 'descending' : 'ascending'
+      const moved: TransposedNote[] = []
+      for (const name of names) {
+        const parsed = parseNote(name)
+        if (parsed === null) return { valid: false, error: `unrecognized note "${name}" (expect e.g. "C#4", "Bb3", "F##4")` }
+        const target = buildIntervalTarget(parsed, canonical, direction)
+        if (target === null) {
+          return { valid: false, error: `cannot transpose "${noteName(parsed)}" by ${canonical} ${direction} (target outside the MIDI 0-127 range or needs more than a double accidental)` }
+        }
+        moved.push({ from: noteName(parsed), to: target.name, midi: target.midi, frequencyHz: midiToFrequency(target.midi, a4) })
+      }
+      return { valid: true, interval: canonical, semitones: INTERVALS[canonical]!.semis, direction, notes: moved }
+    },
+  })
+
+  const CANDIDATE_SCHEMA = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      root: { type: 'string', required: true },
+      quality: { type: 'string', required: true },
+      symbol: { type: 'string', required: true },
+      intervals: { type: 'array', items: { type: 'string' }, required: true },
+      inversion: { type: 'number', required: true },
+      bass: { type: 'string', required: true },
+      slashSymbol: { type: 'string', required: true },
+      rootPosition: { type: 'boolean', required: true },
+      exact: { type: 'boolean', required: true },
+      missing: { type: 'array', items: { type: 'string' } },
+      score: { type: 'number', required: true },
+    },
+  } as const
+
+  const chord_identify = defineTool({
+    name: 'chord_identify',
+    description: 'Identify the chord behind a set of played notes (2-8 notes), including inversions and '
+      + 'enharmonic ambiguity: C E G is Cmaj, E G C (bass E) is Cmaj/E in first inversion, and C E G A '
+      + 'comes back as both C6 and Am7/C because both readings are correct. Voicings that simply omit one '
+      + 'or two chord tones are reported too (C E Bb D is a C9 without the fifth), flagged exact: false '
+      + 'with the missing intervals. Qualities are matched by pitch-class set against '
+      + 'the same 26-quality table as chord_build, so accidental spelling is preserved (a chord on B# '
+      + 'stays a chord on B#, never C).'
+      + ' Candidates are ranked by 2*inversion + quality weight + 3*missing tones, root position first.',
+    parameters: {
+      notes: { type: 'array', items: { type: 'string' }, required: true, description: '2-8 note names as played, e.g. ["E4","G4","C5"]. Order does not matter; the lowest note becomes the bass. Octaves default to 4.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          valid: { type: 'boolean', required: true },
+          notes: { type: 'array', items: { type: 'string' } },
+          bass: { type: 'string' },
+          pitchClasses: { type: 'array', items: { type: 'number' } },
+          mode: { type: 'string', enum: ['exact', 'incomplete'] },
+          best: CANDIDATE_SCHEMA,
+          candidates: { type: 'array', items: CANDIDATE_SCHEMA },
+          total: { type: 'number' },
+          truncated: { type: 'boolean' },
+          error: { type: 'string' },
+        },
+      },
+      render: (_args: { notes: string[] }, value: unknown) => [{ type: 'text', text: renderChordIdentify(value) }],
+    },
+    async execute(args: { notes?: string[] }): Promise<ChordIdentifyResult> {
+      const names = args.notes ?? []
+      if (names.length < 2) return { valid: false, error: `chord_identify needs at least 2 notes (got ${names.length})` }
+      if (names.length > 8) return { valid: false, error: `chord_identify accepts at most 8 notes (got ${names.length})` }
+      const parsed: ParsedNote[] = []
+      for (const name of names) {
+        const note = parseNote(name)
+        if (note === null) return { valid: false, error: `unrecognized note "${name}" (expect e.g. "C#4", "Bb3", "F##4")` }
+        parsed.push(note)
+      }
+      const identified = identifyChord(parsed, CANDIDATE_LIMIT)
+      if (identified === null) {
+        return { valid: false, error: 'need at least two distinct pitch classes to identify a chord' }
+      }
+      const pitchClasses = [...new Set(parsed.map((n) => n.pc))].sort((a, b) => a - b)
+      const result: ChordIdentifyResult = {
+        valid: true,
+        notes: parsed.map(noteName),
+        bass: identified.bass,
+        pitchClasses,
+        mode: identified.mode,
+        candidates: identified.candidates,
+        total: identified.total,
+        truncated: identified.total > identified.candidates.length,
+      }
+      const best = identified.candidates[0]
+      if (best === undefined) {
+        result.error = `no known chord quality matches ${parsed.map(noteName).join(' ')} (pitch classes ${pitchClasses.join(',')})`
+      } else {
+        result.best = best
+      }
+      return result
+    },
+  })
+
+  return { note_info, freq_to_note, chord_build, scale_generate, interval_build, interval_info, scale_harmonize, transpose, chord_identify }
 }

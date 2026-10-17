@@ -725,4 +725,163 @@ export function identifyChord(notes, limit = 12) {
         || a.candidate.inversion - b.candidate.inversion);
     return { bass, mode, candidates: found.slice(0, Math.max(1, limit)).map((r) => r.candidate), total: found.length };
 }
+/**
+ * How common a scale type is — the ranking tie-breaker after spelling cost
+ * (lower = more common). Unknown keys fall back to 4.
+ */
+export const SCALE_TYPE_WEIGHTS = Object.freeze({
+    major: 0, natural_minor: 0,
+    dorian: 1, phrygian: 1, lydian: 1, mixolydian: 1, locrian: 1,
+    harmonic_minor: 1, melodic_minor: 1,
+    major_pentatonic: 1, minor_pentatonic: 1, blues: 1,
+    whole_tone: 2, chromatic: 4,
+});
+const SCALE_TABLE_KEYS = Object.keys(SCALE_TABLE);
+/** Strip the octave label from a spelled note name ("C#4" -> "C#"). */
+export function stripOctave(name) {
+    return name.replace(/-?\d+$/, '');
+}
+/** Every spelling of a pitch class whose accidental stays within a double accidental. */
+function rootSpellings(pc) {
+    const out = [];
+    for (let letterIndex = 0; letterIndex < 7; letterIndex += 1) {
+        const diff = normalizeDiff(pc - DIATONIC_PC[LETTERS[letterIndex]]);
+        if (Math.abs(diff) > 2)
+            continue;
+        out.push({ letterIndex, accidental: diff });
+    }
+    return out;
+}
+/**
+ * Fit the scale table to a set of played notes.
+ *
+ * Pass 1 (`mode: 'exact'`) keeps every scale whose pitch-class set is exactly
+ * the played set — the classic ambiguity comes back in full: the notes of
+ * C major are also D dorian, E phrygian, …, and a five-note set is both
+ * C major pentatonic and A minor pentatonic. Pass 2 (`mode: 'contains'`, only
+ * when pass 1 finds nothing and at least three distinct pitch classes are
+ * played) keeps scales that contain every played note and reports the degrees
+ * that are missing, so a melody fragment still resolves.
+ *
+ * Spelling is reported, never guessed by "nearest key": every root spelling
+ * within a double accidental is tried and the reading that agrees with how the
+ * notes were written wins ties (C#-D#-E#-F#-G#-A#-B# comes back as C# major,
+ * not as the enharmonic Db major). Scales that would need a triple accidental
+ * or more than seven accidentals in total are not reported at all.
+ *
+ * Ranking: fewest missing degrees, then best spelling agreement with the
+ * input, then the most common scale type, then whether the scale's tonic is
+ * the lowest note played (the bass usually names the key), then fewest
+ * accidentals, then root pitch class, then table order. Relative keys share a
+ * pitch-class set, so both readings come back (major and its relative minor);
+ * the order between them is cosmetic. Returns null for fewer than three
+ * distinct pitch classes (too little information to name a scale).
+ */
+export function identifyScale(notes, limit = 12) {
+    const written = new Map();
+    for (const note of notes) {
+        if (!written.has(note.pc))
+            written.set(note.pc, `${note.letter}${accidentalName(note.accidental)}`);
+    }
+    const played = [...written.keys()].sort((a, b) => a - b);
+    if (played.length < 3)
+        return null;
+    const playedSet = new Set(played);
+    const lowestPc = notes.reduce((a, b) => (b.midi < a.midi ? b : a)).pc;
+    const collect = (exactOnly) => {
+        const found = [];
+        for (let tableIndex = 0; tableIndex < SCALE_TABLE_KEYS.length; tableIndex += 1) {
+            const type = SCALE_TABLE_KEYS[tableIndex];
+            const def = SCALE_TABLE[type];
+            for (const pc of played) {
+                for (const root of rootSpellings(pc)) {
+                    const parsed = {
+                        letter: LETTERS[root.letterIndex],
+                        letterIndex: root.letterIndex,
+                        accidental: root.accidental,
+                        octave: 4,
+                        midi: 60 + pc,
+                        pc,
+                    };
+                    let scale = null;
+                    try {
+                        scale = spellScaleNotes(parsed, type);
+                    }
+                    catch {
+                        scale = null;
+                    }
+                    if (scale === null)
+                        continue;
+                    if (scale.some((n) => Math.abs(n.accidental) > 2))
+                        continue;
+                    const degreePcs = def.semis.map((semi) => ((pc + semi) % 12 + 12) % 12);
+                    const degreeSet = new Set(degreePcs);
+                    const hasExtra = played.some((p) => !degreeSet.has(p));
+                    const missingCount = degreePcs.filter((p) => !playedSet.has(p)).length;
+                    if (exactOnly) {
+                        if (hasExtra || missingCount > 0)
+                            continue;
+                    }
+                    else {
+                        if (hasExtra)
+                            continue;
+                        if (missingCount === 0)
+                            continue; // exact matches belong to pass 1
+                    }
+                    const accidentalCount = scale.reduce((sum, n) => sum + Math.abs(n.accidental), 0);
+                    if (accidentalCount > 7)
+                        continue;
+                    const names = scale.map((n) => stripOctave(n.name));
+                    let spellingMismatch = 0;
+                    names.forEach((name, i) => {
+                        const asWritten = written.get(degreePcs[i]);
+                        if (asWritten !== undefined && asWritten !== name)
+                            spellingMismatch += 1;
+                    });
+                    const rootName = names[0];
+                    const candidate = {
+                        root: rootName,
+                        type,
+                        name: `${rootName} ${type.replace(/_/g, ' ')}`,
+                        notes: names,
+                        missing: scale.filter((_n, i) => !playedSet.has(degreePcs[i])).map((n) => stripOctave(n.name)),
+                        exact: missingCount === 0,
+                        accidentalCount,
+                        score: 3 * missingCount + accidentalCount,
+                    };
+                    if (candidate.exact && candidate.missing.length !== 0)
+                        continue;
+                    found.push({ candidate, rootPc: pc, tableIndex, missingCount, spellingMismatch, rootIsLowest: pc === lowestPc });
+                }
+            }
+        }
+        return found;
+    };
+    let ranked = collect(true);
+    let mode = 'exact';
+    if (ranked.length === 0) {
+        mode = 'contains';
+        ranked = collect(false);
+    }
+    // One reading per (type, root pitch class): keep the spelling that agrees best.
+    const bestPerRoot = new Map();
+    for (const entry of ranked) {
+        const key = `${entry.candidate.type}@${entry.rootPc}`;
+        const existing = bestPerRoot.get(key);
+        if (existing === undefined
+            || entry.spellingMismatch < existing.spellingMismatch
+            || (entry.spellingMismatch === existing.spellingMismatch && entry.candidate.accidentalCount < existing.candidate.accidentalCount)) {
+            bestPerRoot.set(key, entry);
+        }
+    }
+    const unique = [...bestPerRoot.values()];
+    unique.sort((a, b) => a.missingCount - b.missingCount
+        || a.spellingMismatch - b.spellingMismatch
+        || (SCALE_TYPE_WEIGHTS[a.candidate.type] ?? 4) - (SCALE_TYPE_WEIGHTS[b.candidate.type] ?? 4)
+        || Number(b.rootIsLowest) - Number(a.rootIsLowest)
+        || a.candidate.accidentalCount - b.candidate.accidentalCount
+        || a.rootPc - b.rootPc
+        || a.tableIndex - b.tableIndex);
+    return { mode, candidates: unique.slice(0, Math.max(1, limit)).map((r) => r.candidate), total: unique.length };
+}
 //# sourceMappingURL=core.js.map

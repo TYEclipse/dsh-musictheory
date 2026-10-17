@@ -269,4 +269,62 @@ export interface ChordIdentification {
  * played (nothing can be identified from one pitch).
  */
 export declare function identifyChord(notes: ParsedNote[], limit?: number): ChordIdentification | null;
+/** One scale reading of a set of played notes. */
+export interface ScaleCandidate {
+    /** Root spelled without octave, e.g. "F#", "Bb". */
+    root: string;
+    /** Canonical scale type (`major`, `dorian`, `blues`, …). */
+    type: string;
+    /** Root + readable type, e.g. "F# major", "A minor pentatonic". */
+    name: string;
+    /** Spelled scale degrees without octave, root first. */
+    notes: string[];
+    /** Scale degrees that are not played (empty when `exact`). */
+    missing: string[];
+    /** True when the played pitch classes are exactly this scale's. */
+    exact: boolean;
+    /** How many accidentals the spelled scale needs (spelling cost). */
+    accidentalCount: number;
+    /** Ranking score: `3 * missing.length + accidentalCount` (lower is better). */
+    score: number;
+}
+/** Result of fitting scales to a set of played notes. */
+export interface ScaleIdentification {
+    mode: 'exact' | 'contains';
+    candidates: ScaleCandidate[];
+    total: number;
+}
+/**
+ * How common a scale type is — the ranking tie-breaker after spelling cost
+ * (lower = more common). Unknown keys fall back to 4.
+ */
+export declare const SCALE_TYPE_WEIGHTS: Readonly<Record<string, number>>;
+/** Strip the octave label from a spelled note name ("C#4" -> "C#"). */
+export declare function stripOctave(name: string): string;
+/**
+ * Fit the scale table to a set of played notes.
+ *
+ * Pass 1 (`mode: 'exact'`) keeps every scale whose pitch-class set is exactly
+ * the played set — the classic ambiguity comes back in full: the notes of
+ * C major are also D dorian, E phrygian, …, and a five-note set is both
+ * C major pentatonic and A minor pentatonic. Pass 2 (`mode: 'contains'`, only
+ * when pass 1 finds nothing and at least three distinct pitch classes are
+ * played) keeps scales that contain every played note and reports the degrees
+ * that are missing, so a melody fragment still resolves.
+ *
+ * Spelling is reported, never guessed by "nearest key": every root spelling
+ * within a double accidental is tried and the reading that agrees with how the
+ * notes were written wins ties (C#-D#-E#-F#-G#-A#-B# comes back as C# major,
+ * not as the enharmonic Db major). Scales that would need a triple accidental
+ * or more than seven accidentals in total are not reported at all.
+ *
+ * Ranking: fewest missing degrees, then best spelling agreement with the
+ * input, then the most common scale type, then whether the scale's tonic is
+ * the lowest note played (the bass usually names the key), then fewest
+ * accidentals, then root pitch class, then table order. Relative keys share a
+ * pitch-class set, so both readings come back (major and its relative minor);
+ * the order between them is cosmetic. Returns null for fewer than three
+ * distinct pitch classes (too little information to name a scale).
+ */
+export declare function identifyScale(notes: ParsedNote[], limit?: number): ScaleIdentification | null;
 //# sourceMappingURL=core.d.ts.map

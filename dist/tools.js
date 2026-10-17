@@ -1,12 +1,12 @@
 /**
- * Tool definitions for dsh-musictheory: nine deterministic music-theory tools
+ * Tool definitions for dsh-musictheory: ten deterministic music-theory tools
  * exposed to every agent via defineTool. Strict JSON-schema parameter surfaces,
  * explicit result interfaces matching the inferred output types.
  *
  * @module dsh-musictheory/tools
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { accidentalName, analyzeInterval, buildChord, buildIntervalTarget, centsDeviation, CHORD_QUALITIES, DEFAULT_A4, enharmonicsOf, frequencyToMidi, generateScale, harmonizeScale, HARMONIZABLE_SCALES, identifyChord, INTERVAL_ALIAS_KEYS, INTERVAL_NAMES, INTERVALS, midiToFrequency, noteName, parseNote, resolveIntervalName, resolveScaleType, SCALE_TYPES, } from "./core.js";
+import { accidentalName, analyzeInterval, buildChord, buildIntervalTarget, centsDeviation, CHORD_QUALITIES, DEFAULT_A4, enharmonicsOf, frequencyToMidi, generateScale, harmonizeScale, HARMONIZABLE_SCALES, identifyChord, identifyScale, INTERVAL_ALIAS_KEYS, INTERVAL_NAMES, INTERVALS, midiToFrequency, noteName, parseNote, resolveIntervalName, resolveScaleType, SCALE_TYPES, } from "./core.js";
 /** How many chord readings `chord_identify` returns before it truncates. */
 export const CANDIDATE_LIMIT = 12;
 /** Reject obviously bad A4 references; fall back to the configured default. */
@@ -95,7 +95,22 @@ function renderChordIdentify(value) {
     const tail = others.length === 0 ? '' : `\n  other readings: ${others}${more}`;
     return `${r.notes.join(' ')} (bass ${r.bass}): ${head}${tail}`;
 }
-/** Build all seven tool definitions from the resolved config. */
+function renderScaleIdentify(value) {
+    const r = value;
+    if (!r.valid)
+        return `cannot identify scale: ${r.error ?? 'unknown error'}`;
+    const candidates = r.candidates ?? [];
+    if (candidates.length === 0)
+        return `no scale identified: ${r.error ?? 'unknown error'}`;
+    const best = r.best;
+    const partial = best.exact ? '' : ` [missing ${best.missing.join(' ')}]`;
+    const head = `${best.name}: ${best.notes.join(' ')}${partial}`;
+    const others = candidates.slice(1, 7).map((c) => c.name).join(', ');
+    const more = r.truncated === true ? ` (+${r.total - candidates.length} more)` : '';
+    const tail = others.length === 0 ? '' : `\n  other readings: ${others}${more}`;
+    return `${r.notes.join(' ')} (${r.mode}): ${head}${tail}`;
+}
+/** Build all ten tool definitions from the resolved config. */
 export function buildMusicTools(config) {
     const note_info = defineTool({
         name: 'note_info',
@@ -619,6 +634,95 @@ export function buildMusicTools(config) {
             return result;
         },
     });
-    return { note_info, freq_to_note, chord_build, scale_generate, interval_build, interval_info, scale_harmonize, transpose, chord_identify };
+    const SCALE_CANDIDATE_SCHEMA = {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+            root: { type: 'string', required: true },
+            type: { type: 'string', required: true },
+            name: { type: 'string', required: true },
+            notes: { type: 'array', items: { type: 'string' }, required: true },
+            missing: { type: 'array', items: { type: 'string' }, required: true },
+            exact: { type: 'boolean', required: true },
+            accidentalCount: { type: 'number', required: true },
+            score: { type: 'number', required: true },
+        },
+    };
+    const scale_identify = defineTool({
+        name: 'scale_identify',
+        description: 'Fit scales to a set of played notes (3-12 notes) — the inverse of scale_generate. '
+            + 'C D E F G A B comes back as C major, and also as D dorian, E phrygian and the other modes of '
+            + 'the same pitch classes; C D E G A is both C major pentatonic and A minor pentatonic. All '
+            + 'readings are ranked by how many degrees are missing, then by how well the spelling agrees '
+            + 'with the notes you wrote (C# D# E# F# G# A# B# is C# major, not the enharmonic Db major), '
+            + 'then by how common the scale type is, then by whether the tonic is the lowest note played '
+            + '(the bass usually names the key), then by the number of accidentals. Relative keys share '
+            + 'their pitch classes, so major and its relative minor both come back; the order between them '
+            + 'is cosmetic. When no scale '
+            + 'contains exactly those pitch classes, `mode` is "contains": scales that include every played '
+            + 'note are returned with the missing degrees listed, so a melody fragment still resolves. '
+            + 'Scales that would need triple accidentals or more than seven accidentals are not reported.',
+        parameters: {
+            notes: { type: 'array', items: { type: 'string' }, required: true, description: '3-12 note names as played, e.g. ["C4","D4","E4","F4","G4","A4","B4"]. Order does not matter; octaves default to 4 and only distinct pitch classes are considered.' },
+        },
+        output: {
+            schema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                    valid: { type: 'boolean', required: true },
+                    notes: { type: 'array', items: { type: 'string' } },
+                    pitchClasses: { type: 'array', items: { type: 'number' } },
+                    mode: { type: 'string', enum: ['exact', 'contains'] },
+                    best: SCALE_CANDIDATE_SCHEMA,
+                    candidates: { type: 'array', items: SCALE_CANDIDATE_SCHEMA },
+                    total: { type: 'number' },
+                    truncated: { type: 'boolean' },
+                    error: { type: 'string' },
+                },
+            },
+            render: (_args, value) => [{ type: 'text', text: renderScaleIdentify(value) }],
+        },
+        async execute(args) {
+            const names = args.notes ?? [];
+            if (names.length < 3)
+                return { valid: false, error: `scale_identify needs at least 3 notes (got ${names.length})` };
+            if (names.length > 12)
+                return { valid: false, error: `scale_identify accepts at most 12 notes (got ${names.length})` };
+            const parsed = [];
+            for (const name of names) {
+                const note = parseNote(name);
+                if (note === null)
+                    return { valid: false, error: `unrecognized note "${name}" (expect e.g. "C#4", "Bb3", "F##4")` };
+                parsed.push(note);
+            }
+            const pitchClasses = [...new Set(parsed.map((n) => n.pc))].sort((a, b) => a - b);
+            if (pitchClasses.length < 3) {
+                return { valid: false, error: `need at least three distinct pitch classes to name a scale (got ${pitchClasses.length})` };
+            }
+            const identified = identifyScale(parsed, CANDIDATE_LIMIT);
+            if (identified === null) {
+                return { valid: false, error: 'need at least three distinct pitch classes to name a scale' };
+            }
+            const result = {
+                valid: true,
+                notes: parsed.map(noteName),
+                pitchClasses,
+                mode: identified.mode,
+                candidates: identified.candidates,
+                total: identified.total,
+                truncated: identified.total > identified.candidates.length,
+            };
+            const best = identified.candidates[0];
+            if (best === undefined) {
+                result.error = `no scale in the table fits ${parsed.map(noteName).join(' ')} (pitch classes ${pitchClasses.join(',')})`;
+            }
+            else {
+                result.best = best;
+            }
+            return result;
+        },
+    });
+    return { note_info, freq_to_note, chord_build, scale_generate, interval_build, interval_info, scale_harmonize, transpose, chord_identify, scale_identify };
 }
 //# sourceMappingURL=tools.js.map

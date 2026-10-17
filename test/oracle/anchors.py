@@ -251,6 +251,160 @@ def _fmt_candidate(c: dict) -> str:
             f"inv={c['inversion']} score={c['score']} order={c['tableIndex']}{tag}")
 
 
+# ===================== scale identification (v0.4.0) =====================
+# Scale tables typed from the published definitions (semitone offsets from the
+# tonic, and the letter each degree must land on — 0 = same letter as the root).
+SCALES: dict[str, tuple[tuple[int, ...], tuple[int, ...]]] = {
+    "major": ((0, 2, 4, 5, 7, 9, 11), (0, 1, 2, 3, 4, 5, 6)),
+    "natural_minor": ((0, 2, 3, 5, 7, 8, 10), (0, 1, 2, 3, 4, 5, 6)),
+    "harmonic_minor": ((0, 2, 3, 5, 7, 8, 11), (0, 1, 2, 3, 4, 5, 6)),
+    "melodic_minor": ((0, 2, 3, 5, 7, 9, 11), (0, 1, 2, 3, 4, 5, 6)),
+    "dorian": ((0, 2, 3, 5, 7, 9, 10), (0, 1, 2, 3, 4, 5, 6)),
+    "phrygian": ((0, 1, 3, 5, 7, 8, 10), (0, 1, 2, 3, 4, 5, 6)),
+    "lydian": ((0, 2, 4, 6, 7, 9, 11), (0, 1, 2, 3, 4, 5, 6)),
+    "mixolydian": ((0, 2, 4, 5, 7, 9, 10), (0, 1, 2, 3, 4, 5, 6)),
+    "locrian": ((0, 1, 3, 5, 6, 8, 10), (0, 1, 2, 3, 4, 5, 6)),
+    "major_pentatonic": ((0, 2, 4, 7, 9), (0, 1, 2, 4, 5)),
+    "minor_pentatonic": ((0, 3, 5, 7, 10), (0, 2, 3, 4, 6)),
+    "blues": ((0, 3, 5, 6, 7, 10), (0, 2, 3, 4, 4, 6)),
+    "whole_tone": ((0, 2, 4, 6, 8, 10), (0, 1, 2, 3, 4, 5)),
+    "chromatic": ((0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11), (0, 0, 1, 1, 2, 3, 3, 4, 4, 5, 5, 6)),
+}
+SCALE_ORDER = list(SCALES)
+SCALE_WEIGHT = {
+    "major": 0, "natural_minor": 0,
+    "dorian": 1, "phrygian": 1, "lydian": 1, "mixolydian": 1, "locrian": 1,
+    "harmonic_minor": 1, "melodic_minor": 1,
+    "major_pentatonic": 1, "minor_pentatonic": 1, "blues": 1,
+    "whole_tone": 2, "chromatic": 4,
+}
+
+
+def root_spellings(pc: int) -> list[tuple[int, int]]:
+    """(letter index, accidental) for every spelling within a double accidental."""
+    out = []
+    for li, letter in enumerate(LETTERS):
+        diff = (pc - DIATONIC_PC[letter] + 6) % 12 - 6
+        if abs(diff) <= 2:
+            out.append((li, diff))
+    return out
+
+
+def spelled_scale(root_letter_index: int, root_acc: int, scale_type: str):
+    """Spelled degrees (no octave) or None when a degree needs a triple accidental."""
+    semis, letters = SCALES[scale_type]
+    root_pc = (DIATONIC_PC[LETTERS[root_letter_index]] + root_acc) % 12
+    out: list[str] = []
+    for semi, step in zip(semis, letters):
+        li = (root_letter_index + step) % 7
+        target = (root_pc + semi) % 12
+        diff = (target - DIATONIC_PC[LETTERS[li]] + 6) % 12 - 6
+        if abs(diff) > 2:
+            return None
+        out.append(f"{LETTERS[li]}{acc_name(diff)}")
+    return out
+
+
+def name_pc(name: str) -> int:
+    letter = name[0]
+    acc = name[1:].count("#") - name[1:].count("b")
+    return (DIATONIC_PC[letter] + acc) % 12
+
+
+def identify_scale(notes: list[str], default_octave: int = 4):
+    """Fit the scale table to the played notes, ranked like the TS implementation.
+
+    Ranking: missing degrees, spelling agreement with the input, scale-type
+    commonness, tonic-is-the-lowest-note, accidental count, root pitch class,
+    table order.
+    """
+    parsed = [parse_note(n, default_octave) for n in notes]
+    if any(p is None for p in parsed):
+        return None
+    written: dict[int, str] = {}
+    for p in parsed:
+        assert p is not None
+        written.setdefault(p[3] % 12, f"{p[0]}{acc_name(p[1])}")
+    played = sorted(written)
+    if len(played) < 3:
+        return None
+    played_set = set(played)
+    lowest = min(p[3] for p in parsed if p is not None) % 12
+
+    def collect(exact_only: bool) -> list[dict]:
+        found = []
+        for table_index, scale_type in enumerate(SCALE_ORDER):
+            semis, _letters = SCALES[scale_type]
+            for pc in played:
+                for li, acc in root_spellings(pc):
+                    names = spelled_scale(li, acc, scale_type)
+                    if names is None:
+                        continue
+                    degree_pcs = [(pc + s) % 12 for s in semis]
+                    degree_set = set(degree_pcs)
+                    has_extra = any(p not in degree_set for p in played)
+                    missing = [n for n, dpc in zip(names, degree_pcs) if dpc not in played_set]
+                    if exact_only:
+                        if has_extra or missing:
+                            continue
+                    else:
+                        if has_extra or not missing:
+                            continue
+                    acc_count = sum(abs(acc_of(n)) for n in names)
+                    if acc_count > 7:
+                        continue
+                    mismatch = sum(1 for n, dpc in zip(names, degree_pcs)
+                                   if dpc in written and written[dpc] != n)
+                    found.append({
+                        "root": names[0], "type": scale_type,
+                        "name": f"{names[0]} {scale_type.replace('_', ' ')}",
+                        "notes": names, "missing": missing, "exact": not missing,
+                        "accidentalCount": acc_count,
+                        "score": 3 * len(missing) + acc_count,
+                        "rootPc": pc, "tableIndex": table_index,
+                        "missingCount": len(missing), "mismatch": mismatch,
+                        "rootIsLowest": pc == lowest,
+                    })
+        return found
+
+    ranked = collect(True)
+    mode = "exact"
+    if not ranked:
+        mode = "contains"
+        ranked = collect(False)
+    best: dict[tuple[str, int], dict] = {}
+    for entry in ranked:
+        key = (entry["type"], entry["rootPc"])
+        current = best.get(key)
+        if current is None or (entry["mismatch"], entry["accidentalCount"]) < (current["mismatch"], current["accidentalCount"]):
+            best[key] = entry
+    unique = list(best.values())
+    unique.sort(key=lambda e: (e["missingCount"], e["mismatch"], SCALE_WEIGHT.get(e["type"], 4),
+                               0 if e["rootIsLowest"] else 1, e["accidentalCount"],
+                               e["rootPc"], e["tableIndex"]))
+    return {"mode": mode, "candidates": unique, "pcs": played}
+
+
+def acc_of(name: str) -> int:
+    return name[1:].count("#") - name[1:].count("b")
+
+
+SCALE_CASES = [
+    ["C4", "D4", "E4", "F4", "G4", "A4", "B4"],
+    ["C4", "D4", "E4", "F#4", "G4", "A4", "B4"],
+    ["A3", "B3", "C4", "D4", "E4", "F4", "G#4"],
+    ["C#4", "D#4", "E#4", "F#4", "G#4", "A#4", "B#4"],
+    ["Bb3", "C4", "D4", "Eb4", "F4", "G4", "A4"],
+    ["C4", "D4", "E4", "G4", "A4"],
+    ["C4", "Eb4", "F4", "Gb4", "G4", "Bb4"],
+    ["C4", "D4", "E4", "F#4", "G#4", "A#4"],
+    ["C4", "C#4", "D4", "D#4", "E4", "F4", "F#4", "G4", "G#4", "A4", "A#4", "B4"],
+    ["C4", "E4", "G4"],
+    ["G3", "C4", "E4"],
+    ["C4", "E4", "G4", "A4"],
+]
+
+
 def cents(f: float, midi: int, a4: float = 440.0) -> float:
     return 1200 * math.log2(f / (a4 * 2 ** ((midi - 69) / 12)))
 
@@ -313,6 +467,69 @@ def main(argv: list[str]) -> int:
         good = syms == ["C6", "Am7"]
         print(f"{'✅' if good else '❌'} C-E-G-A -> {syms} (C6 <-> Am7 ambiguity)")
         ok = ok and good
+        # --- scale_identify (v0.4.0) ---
+        cmaj_set = ["C4", "D4", "E4", "F4", "G4", "A4", "B4"]
+        r = identify_scale(cmaj_set)
+        best = r["candidates"][0] if r else None
+        good = (best is not None and best["name"] == "C major"
+                and best["notes"] == ["C", "D", "E", "F", "G", "A", "B"]
+                and best["accidentalCount"] == 0 and r["mode"] == "exact")
+        print(f"{'✅' if good else '❌'} C major set -> {best['name'] if best else None} "
+              f"{best['notes'] if best else None} acc={best['accidentalCount'] if best else None}")
+        ok = ok and good
+        # seven diatonic modes of one pitch-class set
+        good = r is not None and len(r["candidates"]) == 7
+        print(f"{'✅' if good else '❌'} C major set -> {len(r['candidates']) if r else 0} exact readings (7 modes)")
+        ok = ok and good
+        # every exact reading must carry exactly the played pitch classes
+        exact_pcs = {name_pc(n) for n in cmaj_set}
+        for c in (r["candidates"] if r else []):
+            if {name_pc(n) for n in c["notes"]} != exact_pcs:
+                good = False
+                print(f"❌ {c['name']} pitch classes drift")
+                break
+        else:
+            print("✅ every exact reading carries exactly the played pitch classes")
+        ok = ok and good
+        # spelling agreement: sharps stay sharps
+        r_sharp = identify_scale(["C#4", "D#4", "E#4", "F#4", "G#4", "A#4", "B#4"])
+        best_sharp = r_sharp["candidates"][0] if r_sharp else None
+        good = (best_sharp is not None and best_sharp["name"] == "C# major"
+                and best_sharp["accidentalCount"] == 7
+                and best_sharp["notes"] == ["C#", "D#", "E#", "F#", "G#", "A#", "B#"])
+        print(f"{'✅' if good else '❌'} C# major set -> {best_sharp['name'] if best_sharp else None} "
+              f"acc={best_sharp['accidentalCount'] if best_sharp else None}")
+        ok = ok and good
+        # minor pentatonic is the same five pitch classes as its relative major pentatonic
+        r_pent = identify_scale(["C4", "D4", "E4", "G4", "A4"])
+        names = [c["name"] for c in r_pent["candidates"]] if r_pent else []
+        good = names == ["C major pentatonic", "A minor pentatonic"]
+        print(f"{'✅' if good else '❌'} C D E G A -> {names} (pentatonic pair)")
+        ok = ok and good
+        # harmonic minor is unambiguous within the table
+        r_harm = identify_scale(["A3", "B3", "C4", "D4", "E4", "F4", "G#4"])
+        good = r_harm is not None and len(r_harm["candidates"]) == 1 and r_harm["candidates"][0]["name"] == "A harmonic minor"
+        print(f"{'✅' if good else '❌'} A harmonic minor set -> {[c['name'] for c in r_harm['candidates']] if r_harm else None}")
+        ok = ok and good
+        # a chord is not a scale: it falls back to "contains" and names the missing degrees
+        r_triad = identify_scale(["C4", "E4", "G4"])
+        best_triad = r_triad["candidates"][0] if r_triad else None
+        good = (best_triad is not None and r_triad["mode"] == "contains"
+                and best_triad["name"] == "C major pentatonic"
+                and best_triad["missing"] == ["D", "A"])
+        print(f"{'✅' if good else '❌'} C E G -> {best_triad['name'] if best_triad else None} "
+              f"missing={best_triad['missing'] if best_triad else None}")
+        ok = ok and good
+        # every "contains" reading must include every played pitch class
+        played_pcs = {name_pc(n) for n in ["C4", "E4", "G4"]}
+        for c in (r_triad["candidates"] if r_triad else []):
+            if not played_pcs <= {name_pc(n) for n in c["notes"]}:
+                good = False
+                print(f"❌ {c['name']} drops a played pitch class")
+                break
+        else:
+            print("✅ every 'contains' reading includes every played pitch class")
+        ok = ok and good
         return 0 if ok else 1
 
     print("=" * 72)
@@ -342,6 +559,21 @@ def main(argv: list[str]) -> int:
               f"pitch classes {result['pcs']}, total {len(result['candidates'])})")
         for c in result["candidates"]:
             print("  " + _fmt_candidate(c))
+    print()
+    print("=" * 72)
+    print("scale_identify anchors")
+    print("=" * 72)
+    for notes in SCALE_CASES:
+        result = identify_scale(notes)
+        if result is None:
+            print(f"\n{notes} -> unparsable")
+            continue
+        print(f"\n{notes}  (mode {result['mode']}, pitch classes {result['pcs']}, "
+              f"total {len(result['candidates'])})")
+        for c in result["candidates"]:
+            miss = "" if c["exact"] else f" missing={' '.join(c['missing'])}"
+            print(f"  {c['name']:<26} root={c['root']:<3} acc={c['accidentalCount']} "
+                  f"score={c['score']} notes={' '.join(c['notes'])}{miss}")
     print()
     print("=" * 72)
     print("legacy anchors (test/music.test.ts)")

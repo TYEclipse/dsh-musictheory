@@ -15,7 +15,7 @@ DeepSeek Harness（`dsh`）的音乐理论数学工具箱——零运行时依�
 
 本插件用确定性表格 + 拼写引擎全部代劳。
 
-## 工具（9 个）
+## 工具（10 个）
 
 | 工具 | 功能 |
 |------|------|
@@ -28,6 +28,7 @@ DeepSeek Harness（`dsh`）的音乐理论数学工具箱——零运行时依�
 | `scale_harmonize` | 7 音音阶的和声化：每级三和弦 + 罗马数字 + 正确拼写（C 大调 → `I ii iii IV V vi vii°`，和声小调 III 为增三和弦）；`sevenths: true` 得七和弦（`Imaj7 ii7 iii7 IVmaj7 V7 vi7 viiø7`） |
 | `transpose` | 1—16 个音的拼写感知移调：`Bb3 G3 D4` 上移 M2 → `C4 A3 E4`；`C#4 E#4 G#4` 下移 m3 → `A#3 C##4 E#4`；`F#4` 下移 P4 → `C#4`。用于乐器移调（降 B 小号 +M2、降 E 中音萨克斯 +M6）与转调 |
 | `chord_identify` | 由 2—8 个音识别和弦：`C E G` → `Cmaj`；`E G C`（低音 E）→ `Cmaj/E` 第一转位；`C E G A` 同时给出 `C6` 与 `Am7/C`；`C Eb Gb Bbb` 给出四个减七转位；写在 `B#` 上的和弦仍是 `B#`。省略音（`C E Bb D` → `C9`，`exact: false`、`missing: ["5"]`）也能匹配 |
+| `scale_identify` | 由 3—12 个音反推音阶（`scale_generate` 的逆运算）：`C D E F G A B` → `C major`，同时给出 `A natural minor`、`D dorian` 等同音级集合的调式；`C D E G A` 既是 `C major pentatonic` 也是 `A minor pentatonic`；`A B C D E F G#` 唯一命中 `A harmonic minor`。拼写一致者优先：`C# D# E# F# G# A# B#` 是 `C# major`，不会给同音异名的 `Db major`。若没有音阶恰好吻合，`mode: "contains"` 给出包含全部音的音阶并列出缺失音（`C E G` → `C major pentatonic`，缺 `D A`） |
 
 ## 安装
 
@@ -35,7 +36,7 @@ DeepSeek Harness（`dsh`）的音乐理论数学工具箱——零运行时依�
 dsh plugin --profile <profile-name> add github:TYEclipse/dsh-musictheory
 ```
 
-（也可钉版本安装：`add github:TYEclipse/dsh-musictheory#v0.3.0`。）
+（也可钉版本安装：`add github:TYEclipse/dsh-musictheory#v0.4.0`。）
 
 ## 示例
 
@@ -53,6 +54,10 @@ transpose  notes=["Bb3","G3","D4"] interval="M2" → C4 A3 E4（降 B 乐器读�
 chord_identify  notes=["E4","G4","C5"] → Cmaj/E（maj，第 1 转位）
 chord_identify  notes=["C4","E4","G4","A4"] → C6，另有读法 Am7/C
 chord_identify  notes=["C4","E4","Bb4","D5"] → C9（exact: false，missing ["5"]）
+scale_identify  notes=["C4","D4","E4","F4","G4","A4","B4"] → C major（另有 A natural minor、D dorian 等）
+scale_identify  notes=["C4","D4","E4","G4","A4"] → C major pentatonic，其次 A minor pentatonic
+scale_identify  notes=["C#4","D#4","E#4","F#4","G#4","A#4","B#4"] → C# major（七个升号，不是 Db major）
+scale_identify  notes=["C4","E4","G4"] → C major pentatonic，缺 D A（mode: contains）
 ```
 
 ### `chord_identify` 的排序规则
@@ -81,7 +86,7 @@ C 的减七度是 B 音位 → Bbb），这正是手写乐理最容易错的地�
 
 - 零运行时依赖：纯算术，无网络、无 shell、无文件访问
 - 确定性输出；非法输入返回结构化错误
-- 123 个单元测试；数值锚点由随源码提交的独立 Python oracle（`test/oracle/anchors.py`）
+- 136 个单元测试；数值锚点由随源码提交的独立 Python oracle（`test/oracle/anchors.py`）
   逐条打印（可用 `python3 test/oracle/anchors.py --check` 复验公开事实）
 
 ## 路线图

@@ -1,6 +1,8 @@
 /**
  * Tests for dsh-musictheory v0.2.0 interval engine and scale harmonization.
  *
+ * ORACLE: test/oracle/anchors.py
+ *
  * Anchor values come from the independent closed-form oracle
  * an independent anchors script (12-TET definitions + letter ladder),
  * cross-checked against hand-verified music theory:

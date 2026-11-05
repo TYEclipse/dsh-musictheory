@@ -2,7 +2,7 @@
 
 Deterministic music theory math for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) — zero runtime dependencies, pure 12-TET arithmetic.
 
-**中文简介**：音乐理论数学工具箱——解析音名、频率与 MIDI 互转、26 种和弦与 17 种音阶的正确拼写（G# 大三和弦是 G# B# D# 而非 G# C D#）、音程构建与识别（C→F# 是增四度、C→Gb 是减五度）、音阶和声化（C 大调三和弦 I ii iii IV V vi vii°）、拼写感知移调（G# 上移大三度 = B#）、按音级集合识别和弦（E G C = Cmaj/E 第一转位；C E G A 同时是 C6 与 Am7/C）、由音反推音阶（C D E F G A B 是 C 大调，也是 A 自然小调与 D 多利亚；C# D# E# F# G# A# B# 是 C# 大调而非同音异名的 Db 大调）。零运行时依赖、纯确定计算，专治大模型手算音高/升降号/同音异名的高频错误。
+**中文简介**：音乐理论数学工具箱——解析音名、频率与 MIDI 互转、26 种和弦与 17 种音阶的正确拼写（G# 大三和弦是 G# B# D# 而非 G# C D#）、音程构建与识别（C→F# 是增四度、C→Gb 是减五度）、音阶和声化（C 大调三和弦 I ii iii IV V vi vii°）、拼写感知移调（G# 上移大三度 = B#）、按音级集合识别和弦（E G C = Cmaj/E 第一转位；C E G A 同时是 C6 与 Am7/C）、由音反推音阶（C D E F G A B 是 C 大调，也是 A 自然小调与 D 多利亚；C# D# E# F# G# A# B# 是 C# 大调而非同音异名的 Db 大调）、调号与五度圈（三个降号是 Eb 大调 / C 小调，七升七降内给同音异名调）、和弦进行的罗马数字分析（C 大调里 Am F C G = vi IV I V；A# 是 #VI、Bb 是 bVII；C/E = I6、G7/F = V42）。零运行时依赖、纯确定计算，专治大模型手算音高/升降号/同音异名的高频错误。
 
 ## Why
 
@@ -29,6 +29,8 @@ These tools replace all of that with deterministic tables and a spelling engine.
 | `transpose` | Transpose 1-16 notes by any interval, spelling-aware and in both directions: `Bb3 G3 D4` up a M2 → `C4 A3 E4`, `C#4 E#4 G#4` down a m3 → `A#3 C##4 E#4`, `F#4` down a P4 → `C#4`. Canonical intervals (`M3`, `P5`, `m7`, `M9`, `P15`) plus aliases (`tritone`, `octave`, `whole_tone`). Use it for instrument transpositions (Bb trumpet +M2, Eb alto sax +M6) and key changes. |
 | `chord_identify` | Identifies the chord behind 2-8 played notes: `C E G` → `Cmaj`; `E G C` (bass E) → `Cmaj/E`, first inversion; `C E G A` → **both** `C6` and `Am7/C`; `C Eb Gb Bbb` → all four dim7 rotations; a chord written on `B#` stays on `B#`. Voicings that omit one or two chord tones are matched too (`C E Bb D` → `C9` with `missing: ["5"]`, `exact: false`). |
 | `scale_identify` | Fits scales to 3-12 played notes — the inverse of `scale_generate`: `C D E F G A B` → `C major`, plus `A natural minor`, `D dorian` and the other modes of the same pitch classes; `C D E G A` → both `C major pentatonic` and `A minor pentatonic`; `A B C D E F G#` → `A harmonic minor` only. Spelling agreement wins: `C# D# E# F# G# A# B#` is `C# major`, not the enharmonic `Db major`. When nothing matches exactly, `mode: "contains"` returns scales that include every note with the missing degrees listed (`C E G` → `C major pentatonic`, missing `D A`). |
+| `key_signature` | Look up a key signature instead of counting sharps: ask by key name (`Eb`, `F# minor`) or by circle-of-fifths position (`fifths: -3` = three flats). Returns the accidentals **in written order** (`Bb Eb Ab`), the relative key (same signature), the parallel key (same tonic), the enharmonic spelling inside seven accidentals (`C# major` = `Db major`) and the spelled scale. Signatures beyond seven accidentals come back `practical: false` because they need double sharps — use `enharmonic` for everyday writing. |
+| `roman_numeral` | Roman-numeral analysis of a progression: `Am F C G` in C major → `vi IV I V`. The degree comes from the **written letter**, not the pitch class — in C major `A#` is `#VI` and `Bb` is `bVII` (same key on the piano, two functions on paper). Each chord reports its degree, alteration, correctly spelled tones, whether every tone is in the key (`inKey`), whether it is the key's own chord of that size on that degree (`diatonic`), plus the key triad on that degree as a reference (degree 7 in major is `vii°`). Slash chords get figured bass: `C/E` → `I6`, `G7/F` → `V42`; a non-chord bass keeps the slash (`C/D` → `I/D`). Minor keys are analyzed with natural minor, so the raised leading tone shows up as `#vii`. |
 
 ## Install
 
@@ -36,7 +38,7 @@ These tools replace all of that with deterministic tables and a spelling engine.
 dsh plugin --profile <profile-name> add github:TYEclipse/dsh-musictheory
 ```
 
-(Install from the npm-style git URL, or pin a release: `add github:TYEclipse/dsh-musictheory#v0.4.0`.)
+(Install from the npm-style git URL, or pin a release: `add github:TYEclipse/dsh-musictheory#v0.5.0`.)
 
 ## Examples
 
@@ -62,6 +64,12 @@ scale_identify  notes=["C4","D4","E4","F4","G4","A4","B4"] → C major (also A n
 scale_identify  notes=["C4","D4","E4","G4","A4"] → C major pentatonic, then A minor pentatonic
 scale_identify  notes=["C#4","D#4","E#4","F#4","G#4","A#4","B#4"] → C# major (seven sharps, not Db major)
 scale_identify  notes=["C4","E4","G4"] → C major pentatonic, missing D A (mode: contains)
+key_signature  key="Eb"            → 3 flats (Bb Eb Ab), relative C minor, parallel Eb minor
+key_signature  fifths=7            → C# major (seven sharps), enharmonic Db major
+roman_numeral  key="C major" chords=["Am","F","C","G"] → vi IV I V
+roman_numeral  key="C major" chords=["C/E","G7/F"]     → I6 V42
+roman_numeral  key="A minor" chords=["Am","Dm","E"]    → i iv V (the E major triad is inKey: false)
+roman_numeral  key="C major" chords=["A#","Bb"]        → #VI bVII (same key, two functions)
 ```
 
 ### How `chord_identify` ranks

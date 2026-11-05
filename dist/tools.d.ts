@@ -1,12 +1,12 @@
 /**
- * Tool definitions for dsh-musictheory: ten deterministic music-theory tools
+ * Tool definitions for dsh-musictheory: twelve deterministic music-theory tools
  * exposed to every agent via defineTool. Strict JSON-schema parameter surfaces,
  * explicit result interfaces matching the inferred output types.
  *
  * @module dsh-musictheory/tools
  */
 import { type ToolDefinition } from '@deepseek-ai/dsh-tools';
-import { type ChordCandidate, type HarmonyChord, type NoteData, type ScaleCandidate } from './core.ts';
+import { type ChordCandidate, type HarmonyChord, type KeyMode, type NoteData, type RomanChord, type ScaleCandidate } from './core.ts';
 import type { ResolvedConfig } from './index.ts';
 /** How many chord readings `chord_identify` returns before it truncates. */
 export declare const CANDIDATE_LIMIT = 12;
@@ -21,6 +21,8 @@ export interface ToolSet {
     transpose: ToolDefinition;
     chord_identify: ToolDefinition;
     scale_identify: ToolDefinition;
+    key_signature: ToolDefinition;
+    roman_numeral: ToolDefinition;
 }
 export interface NoteInfoResult {
     valid: boolean;
@@ -121,6 +123,34 @@ export interface ScaleIdentifyResult {
     candidates?: ScaleCandidate[];
     total?: number;
     truncated?: boolean;
+    error?: string;
+}
+export interface KeySignatureResult {
+    valid: boolean;
+    key?: string;
+    tonic?: string;
+    mode?: KeyMode;
+    fifths?: number;
+    accidentals?: string[];
+    accidentalCount?: number;
+    signature?: string;
+    relative?: string;
+    parallel?: string;
+    enharmonic?: string;
+    practical?: boolean;
+    notes?: string[];
+    modeAssumed?: boolean;
+    error?: string;
+}
+export interface RomanNumeralResult {
+    valid: boolean;
+    key?: string;
+    mode?: KeyMode;
+    fifths?: number;
+    progression?: string;
+    chords?: RomanChord[];
+    diatonicCount?: number;
+    modeAssumed?: boolean;
     error?: string;
 }
 /** Build all ten tool definitions from the resolved config. */

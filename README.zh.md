@@ -15,7 +15,7 @@ DeepSeek Harness（`dsh`）的音乐理论数学工具箱——零运行时依�
 
 本插件用确定性表格 + 拼写引擎全部代劳。
 
-## 工具（10 个）
+## 工具（12 个）
 
 | 工具 | 功能 |
 |------|------|
@@ -29,6 +29,8 @@ DeepSeek Harness（`dsh`）的音乐理论数学工具箱——零运行时依�
 | `transpose` | 1—16 个音的拼写感知移调：`Bb3 G3 D4` 上移 M2 → `C4 A3 E4`；`C#4 E#4 G#4` 下移 m3 → `A#3 C##4 E#4`；`F#4` 下移 P4 → `C#4`。用于乐器移调（降 B 小号 +M2、降 E 中音萨克斯 +M6）与转调 |
 | `chord_identify` | 由 2—8 个音识别和弦：`C E G` → `Cmaj`；`E G C`（低音 E）→ `Cmaj/E` 第一转位；`C E G A` 同时给出 `C6` 与 `Am7/C`；`C Eb Gb Bbb` 给出四个减七转位；写在 `B#` 上的和弦仍是 `B#`。省略音（`C E Bb D` → `C9`，`exact: false`、`missing: ["5"]`）也能匹配 |
 | `scale_identify` | 由 3—12 个音反推音阶（`scale_generate` 的逆运算）：`C D E F G A B` → `C major`，同时给出 `A natural minor`、`D dorian` 等同音级集合的调式；`C D E G A` 既是 `C major pentatonic` 也是 `A minor pentatonic`；`A B C D E F G#` 唯一命中 `A harmonic minor`。拼写一致者优先：`C# D# E# F# G# A# B#` 是 `C# major`，不会给同音异名的 `Db major`。若没有音阶恰好吻合，`mode: "contains"` 给出包含全部音的音阶并列出缺失音（`C E G` → `C major pentatonic`，缺 `D A`） |
+| `key_signature` | 调号查询，不用手数升降号：按调名（`Eb`、`F# minor`）或五度圈位置（`fifths: -3` = 三个降号）问，返回**书写顺序的升降号**（`Bb Eb Ab`）、关系调（同调号异调式）、同主音调（同主音异调式）、七升七降范围内的**同音异名调**（`C# major` = `Db major`）与该调音阶拼写；超过七个升降号的调标 `practical: false`（需要重升重降），日常改用它给的 `enharmonic` |
+| `roman_numeral` | 和弦进行的罗马数字分析：C 大调里 `Am F C G` → `vi IV I V`。级数由**音名字母**决定而不是音级（C 大调里 `A#` 是 `#VI`、`Bb` 是 `bVII`，钢琴上同一个键、谱面上两个功能），每个和弦给出级数、变音、正确拼写的和弦音、是否全在本调（`inKey`）、是否就是本调该级同规模的和弦（`diatonic`），并给该级本调和弦作参照（大调第 7 级是 `vii°`）。斜线和弦给数字低音标记：`C/E` → `I6`、`G7/F` → `V42`；低音不是和弦音就保留斜线（`C/D` → `I/D`）。小调按自然小调分析，和声小调的升七级会显示成 `#vii` |
 
 ## 安装
 
@@ -36,7 +38,7 @@ DeepSeek Harness（`dsh`）的音乐理论数学工具箱——零运行时依�
 dsh plugin --profile <profile-name> add github:TYEclipse/dsh-musictheory
 ```
 
-（也可钉版本安装：`add github:TYEclipse/dsh-musictheory#v0.4.0`。）
+（也可钉版本安装：`add github:TYEclipse/dsh-musictheory#v0.5.0`。）
 
 ## 示例
 
@@ -58,6 +60,12 @@ scale_identify  notes=["C4","D4","E4","F4","G4","A4","B4"] → C major（另有 
 scale_identify  notes=["C4","D4","E4","G4","A4"] → C major pentatonic，其次 A minor pentatonic
 scale_identify  notes=["C#4","D#4","E#4","F#4","G#4","A#4","B#4"] → C# major（七个升号，不是 Db major）
 scale_identify  notes=["C4","E4","G4"] → C major pentatonic，缺 D A（mode: contains）
+key_signature  key="Eb"            → 三个降号（Bb Eb Ab），关系调 C minor，同主音 Eb minor
+key_signature  fifths=7            → C# major（七个升号），同音异名 Db major
+roman_numeral  key="C major" chords=["Am","F","C","G"] → vi IV I V
+roman_numeral  key="C major" chords=["C/E","G7/F"]     → I6 V42
+roman_numeral  key="A minor" chords=["Am","Dm","E"]    → i iv V（E 大三和弦，inKey: false）
+roman_numeral  key="C major" chords=["A#","Bb"]        → #VI bVII（同一个键，两个功能）
 ```
 
 ### `chord_identify` 的排序规则

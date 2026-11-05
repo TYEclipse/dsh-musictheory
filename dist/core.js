@@ -884,4 +884,397 @@ export function identifyScale(notes, limit = 12) {
         || a.tableIndex - b.tableIndex);
     return { mode, candidates: unique.slice(0, Math.max(1, limit)).map((r) => r.candidate), total: unique.length };
 }
+/** Order in which sharps appear in a key signature (F C G D A E B). */
+const SHARP_ORDER = ['F', 'C', 'G', 'D', 'A', 'E', 'B'];
+/** Order in which flats appear in a key signature (B E A D G C F). */
+const FLAT_ORDER = ['B', 'E', 'A', 'D', 'G', 'C', 'F'];
+/** Semitone offsets of a major scale from its tonic. */
+const MAJOR_SEMIS = [0, 2, 4, 5, 7, 9, 11];
+/** Semitone offsets of a natural minor scale from its tonic. */
+const MINOR_SEMIS = [0, 2, 3, 5, 7, 8, 10];
+/**
+ * Widest key signature this module will spell: 11 sharps/flats (the seventh
+ * accidental doubles). Anything wider would need a triple accidental, which
+ * no conventional notation uses.
+ */
+export const MAX_FIFTHS = 11;
+/** Letter index of the tonic of the key at `fifths` (0 = C … 6 = B). */
+function tonicLetterForFifths(fifths, mode) {
+    const steps = mode === 'major' ? 4 * fifths : 4 * fifths - 2;
+    return ((steps % 7) + 7) % 7;
+}
+/** Pitch class of the tonic of the key at `fifths`. */
+function tonicPcForFifths(fifths, mode) {
+    const raw = mode === 'major' ? 7 * fifths : 7 * fifths - 3;
+    return ((raw % 12) + 12) % 12;
+}
+function spelledTonic(fifths, mode) {
+    const letterIndex = tonicLetterForFifths(fifths, mode);
+    const pc = tonicPcForFifths(fifths, mode);
+    const accidental = normalizeDiff(pc - DIATONIC_PC[LETTERS[letterIndex]]);
+    return `${LETTERS[letterIndex]}${accidentalName(accidental)}`;
+}
+function signatureText(accidentalCount, sharp) {
+    if (accidentalCount === 0)
+        return 'no accidentals';
+    return sharp ? `${accidentalCount} sharp${accidentalCount === 1 ? '' : 's'}` : `${accidentalCount} flat${accidentalCount === 1 ? '' : 's'}`;
+}
+/** The accidentals of a signature in the order they are written. */
+function signatureAccidentals(fifths) {
+    const count = Math.abs(fifths);
+    const order = fifths > 0 ? SHARP_ORDER : FLAT_ORDER;
+    const out = [];
+    for (let i = 0; i < count; i += 1) {
+        const letter = order[i % 7];
+        const doubled = i >= 7;
+        out.push(`${letter}${accidentalName(fifths > 0 ? (doubled ? 2 : 1) : (doubled ? -2 : -1))}`);
+    }
+    return out;
+}
+/** Spelled notes of the key's scale (natural minor for minor keys), tonic first. */
+function keyScaleNotes(fifths, mode) {
+    const letterIndex = tonicLetterForFifths(fifths, mode);
+    const pc = tonicPcForFifths(fifths, mode);
+    const semis = mode === 'major' ? MAJOR_SEMIS : MINOR_SEMIS;
+    return semis.map((semi, i) => {
+        const li = (letterIndex + i) % 7;
+        const target = (pc + semi) % 12;
+        return `${LETTERS[li]}${accidentalName(spellOnLetter(target, li))}`;
+    });
+}
+/**
+ * Resolve a signed circle-of-fifths position into a key signature.
+ *
+ * `fifths = 0` is C major / A minor, positive values are sharp keys
+ * (1 = G major, 7 = C# major), negative values flat keys (-1 = F major,
+ * -7 = Cb major). Signatures beyond seven accidentals still resolve (they
+ * need double sharps or double flats) but are flagged `practical: false`.
+ * Returns null when |fifths| > 11 (that would need a triple accidental).
+ */
+export function keySignature(fifths, mode = 'major') {
+    if (!Number.isInteger(fifths) || Math.abs(fifths) > MAX_FIFTHS)
+        return null;
+    const tonic = spelledTonic(fifths, mode);
+    const accidentalCount = Math.abs(fifths);
+    const signature = {
+        key: `${tonic} ${mode}`,
+        tonic,
+        mode,
+        fifths,
+        accidentals: signatureAccidentals(fifths),
+        accidentalCount,
+        signature: signatureText(accidentalCount, fifths > 0),
+        relative: `${spelledTonic(fifths, mode === 'major' ? 'minor' : 'major')} ${mode === 'major' ? 'minor' : 'major'}`,
+        parallel: `${spelledTonic(fifths + (mode === 'major' ? -3 : 3), mode === 'major' ? 'minor' : 'major')} ${mode === 'major' ? 'minor' : 'major'}`,
+        practical: accidentalCount <= 7,
+        notes: keyScaleNotes(fifths, mode),
+    };
+    if (fifths !== 0) {
+        const flipped = fifths > 0 ? fifths - 12 : fifths + 12;
+        if (Math.abs(flipped) <= 7)
+            signature.enharmonic = `${spelledTonic(flipped, mode)} ${mode}`;
+    }
+    return signature;
+}
+/**
+ * Resolve the circle-of-fifths position of a written tonic, e.g. "Eb" → -3,
+ * "F#" → 6, "Cb" → -7, "A" as a minor tonic → 0. Returns null when the
+ * spelling is not a key this module can spell.
+ */
+export function fifthsOfTonic(letterIndex, accidental, mode) {
+    if (Math.abs(accidental) > 2)
+        return null;
+    const pc = (((DIATONIC_PC[LETTERS[letterIndex]] + accidental) % 12) + 12) % 12;
+    for (let fifths = -MAX_FIFTHS; fifths <= MAX_FIFTHS; fifths += 1) {
+        if (tonicLetterForFifths(fifths, mode) === letterIndex && tonicPcForFifths(fifths, mode) === pc)
+            return fifths;
+    }
+    return null;
+}
+/** Parse a key spec like "Eb", "F# minor", "Bb major", "c#min". */
+export function parseKeySpec(spec, modeOverride) {
+    const match = /^([A-Ga-g])(#{1,2}|x|b{1,2})?\s*(.*)$/.exec(spec.trim());
+    if (match === null)
+        return null;
+    const letter = match[1].toUpperCase();
+    const letterIndex = LETTERS.indexOf(letter);
+    const accidental = accidentalSemis(match[2] ?? '');
+    const rest = match[3].trim().toLowerCase();
+    let mode;
+    let modeAssumed = false;
+    if (rest === '' || rest === 'key') {
+        mode = modeOverride ?? 'major';
+        modeAssumed = modeOverride === undefined;
+    }
+    else if (rest === 'major' || rest === 'maj') {
+        mode = 'major';
+    }
+    else if (rest === 'minor' || rest === 'min' || rest === 'm') {
+        mode = 'minor';
+    }
+    else {
+        return null;
+    }
+    const fifths = fifthsOfTonic(letterIndex, accidental, mode);
+    if (fifths === null)
+        return null;
+    const signature = keySignature(fifths, mode);
+    if (signature === null)
+        return null;
+    return { signature, modeAssumed };
+}
+/** Quality aliases accepted on top of the canonical chord-table keys. */
+const CHORD_QUALITY_ALIASES = Object.freeze({
+    '': 'maj',
+    maj: 'maj',
+    M: 'maj',
+    major: 'maj',
+    m: 'min',
+    min: 'min',
+    minor: 'min',
+    '-': 'min',
+    dim: 'dim',
+    '°': 'dim',
+    o: 'dim',
+    aug: 'aug',
+    '+': 'aug',
+    M7: 'maj7',
+    'Δ7': 'maj7',
+    major7: 'maj7',
+    min7: 'm7',
+    '-7': 'm7',
+    min9: 'm9',
+    '-9': 'm9',
+    min11: 'm11',
+    '-11': 'm11',
+    'ø': 'm7b5',
+    'ø7': 'm7b5',
+    min7b5: 'm7b5',
+    '°7': 'dim7',
+    o7: 'dim7',
+    min6: 'm6',
+    '-6': 'm6',
+    major6: '6',
+    major9: 'maj9',
+    major13: 'maj13',
+    dom7: '7',
+});
+/** Map a written chord suffix to a canonical chord-table quality. */
+export function resolveChordQuality(text) {
+    if (text in CHORDS)
+        return text;
+    return CHORD_QUALITY_ALIASES[text] ?? null;
+}
+/**
+ * Parse a chord symbol like "C", "Am", "F#m7b5", "Bb7", "C/E", "D6/9".
+ * Returns null when the root, the slash bass or the quality is not
+ * recognized — no quality is ever guessed from a partial match.
+ */
+export function parseChordSymbol(symbol) {
+    const trimmed = symbol.trim();
+    const match = /^([A-Ga-g])(#{1,2}|x|b{1,2})?/.exec(trimmed);
+    if (match === null)
+        return null;
+    const rootText = `${match[1]}${match[2] ?? ''}`;
+    const root = parseNote(rootText);
+    if (root === null)
+        return null;
+    let rest = trimmed.slice(match[0].length);
+    let bass;
+    const slash = rest.lastIndexOf('/');
+    if (slash >= 0) {
+        const candidate = rest.slice(slash + 1);
+        const parsedBass = parseNote(candidate);
+        if (parsedBass !== null) {
+            bass = parsedBass;
+            rest = rest.slice(0, slash);
+        }
+    }
+    const quality = resolveChordQuality(rest);
+    if (quality === null)
+        return null;
+    const parsed = { symbol: trimmed, root, quality };
+    if (bass !== undefined)
+        parsed.bass = bass;
+    return parsed;
+}
+/** Roman numeral of a key's diatonic chord on a degree. */
+function keyChordRoman(scalePcs, degree) {
+    const root = scalePcs[degree];
+    const rel = (semi) => (((scalePcs[semi] - root) % 12) + 12) % 12;
+    const quality = triadQuality(rel((degree + 2) % 7), rel((degree + 4) % 7));
+    return romanFor(degree, quality, false);
+}
+/**
+ * Analyze a progression of chord symbols in a key.
+ *
+ * The scale degree is decided by the written letter, not by the pitch class:
+ * in C major, `A#` is `#vi` and `Bb` is `bVII` (same key on the piano, two
+ * different functions on paper). Chord qualities come from the same table as
+ * `chord_build`, so `diatonic` can be checked against the key's own chord of
+ * the same size, and slash basses get figured-bass labels (`C/E` → `I6`,
+ * `G7/F` → `V42`). Chords whose tones leave the key are reported with
+ * `inKey: false` instead of being forced into a degree.
+ */
+export function analyzeProgression(spec, symbols, modeOverride) {
+    if (symbols.length === 0)
+        return { ok: false, error: 'give at least one chord symbol (e.g. ["Am","F","C","G"])' };
+    if (symbols.length > 16)
+        return { ok: false, error: `at most 16 chords per progression (got ${symbols.length})` };
+    const parsedKey = parseKeySpec(spec, modeOverride);
+    if (parsedKey === null) {
+        return { ok: false, error: `unrecognized key "${spec}" (expect e.g. "C major", "Eb", "F# minor")` };
+    }
+    const signature = parsedKey.signature;
+    const tonicLetter = tonicLetterForFifths(signature.fifths, signature.mode);
+    const tonicPc = tonicPcForFifths(signature.fifths, signature.mode);
+    const semis = signature.mode === 'major' ? MAJOR_SEMIS : MINOR_SEMIS;
+    const scalePcs = semis.map((semi) => (tonicPc + semi) % 12);
+    const scaleSet = new Set(scalePcs);
+    const chords = [];
+    for (const symbol of symbols) {
+        const parsed = parseChordSymbol(symbol);
+        if (parsed === null) {
+            return { ok: false, error: `unrecognized chord symbol "${symbol}" (expect e.g. "Am", "F#m7b5", "Bb7", "C/E")` };
+        }
+        const degree = (parsed.root.letterIndex - tonicLetter + 7) % 7;
+        const accidental = normalizeDiff(parsed.root.pc - scalePcs[degree]);
+        if (Math.abs(accidental) > 2) {
+            return { ok: false, error: `root of "${symbol}" is ${Math.abs(accidental)} semitones from scale degree ${degree + 1} of ${signature.key}; that is not a chromatic alteration this tool names` };
+        }
+        const def = CHORDS[parsed.quality];
+        const notes = [];
+        for (let i = 0; i < def.letters.length; i += 1) {
+            const li = (parsed.root.letterIndex + def.letters[i]) % 7;
+            const pc = (((parsed.root.pc + def.semis[i]) % 12) + 12) % 12;
+            let accidentalOfTone;
+            try {
+                accidentalOfTone = spellOnLetter(pc, li);
+            }
+            catch {
+                return { ok: false, error: `chord tone ${i + 1} of "${symbol}" needs more than a double accidental` };
+            }
+            notes.push(`${LETTERS[li]}${accidentalName(accidentalOfTone)}`);
+        }
+        const chordPcs = [...new Set(def.semis.map((semi) => (((parsed.root.pc + semi) % 12) + 12) % 12))];
+        const inKey = chordPcs.every((pc) => scaleSet.has(pc));
+        const prefix = accidental > 0 ? '#'.repeat(accidental) : 'b'.repeat(-accidental);
+        const upper = UPPER_QUALITIES.has(parsed.quality);
+        const suffix = ROMAN_SUFFIX[parsed.quality] ?? '';
+        const numeral = `${prefix}${upper ? ROMAN[degree] : ROMAN[degree].toLowerCase()}`;
+        let roman = `${numeral}${suffix}`;
+        let inversion;
+        let bassInChord;
+        if (parsed.bass !== undefined) {
+            const bassName = `${parsed.bass.letter}${accidentalName(parsed.bass.accidental)}`;
+            const index = chordPcs.indexOf(parsed.bass.pc);
+            if (index >= 0) {
+                inversion = index;
+                bassInChord = true;
+                const figured = figuredRoman(numeral, suffix, parsed.quality, index);
+                if (figured !== null)
+                    roman = figured;
+                else
+                    roman = `${numeral}${suffix}/${bassName}`;
+            }
+            else {
+                bassInChord = false;
+                roman = `${numeral}${suffix}/${bassName}`;
+            }
+        }
+        const keyChordPcs = (size) => {
+            const out = [];
+            for (let j = 0; j < size; j += 1)
+                out.push(scalePcs[(degree + 2 * j) % 7]);
+            return out;
+        };
+        const size = chordPcs.length;
+        const diatonicSet = size === 3 || size === 4 ? keyChordPcs(size) : null;
+        const diatonic = diatonicSet === null
+            ? inKey
+            : diatonicSet.length === chordPcs.length && diatonicSet.every((pc) => chordPcs.includes(pc));
+        const chord = {
+            symbol: parsed.symbol,
+            root: `${parsed.root.letter}${accidentalName(parsed.root.accidental)}`,
+            quality: parsed.quality,
+            degree: degree + 1,
+            accidental,
+            roman,
+            inKey,
+            diatonic,
+            keyTriad: keyChordRoman(scalePcs, degree),
+            notes,
+        };
+        if (parsed.bass !== undefined)
+            chord.bass = `${parsed.bass.letter}${accidentalName(parsed.bass.accidental)}`;
+        if (inversion !== undefined)
+            chord.inversion = inversion;
+        if (bassInChord !== undefined)
+            chord.bassInChord = bassInChord;
+        chords.push(chord);
+    }
+    return {
+        ok: true,
+        value: {
+            key: signature.key,
+            mode: signature.mode,
+            fifths: signature.fifths,
+            progression: chords.map((c) => c.roman).join(' '),
+            chords,
+            diatonicCount: chords.filter((c) => c.diatonic).length,
+        },
+    };
+}
+/** Qualities whose roman numeral stays uppercase (major or no third). */
+const UPPER_QUALITIES = new Set([
+    'maj', 'aug', 'sus2', 'sus4', '5', '6', '7', 'maj7', 'aug7', '7sus4',
+    'add9', 'maj9', '9', '11', '13', 'maj13', '6/9',
+]);
+/** Suffix the roman numeral carries for a quality. */
+const ROMAN_SUFFIX = Object.freeze({
+    maj: '',
+    min: '',
+    dim: '°',
+    aug: '+',
+    sus2: 'sus2',
+    sus4: 'sus4',
+    5: '5',
+    6: '6',
+    m6: '6',
+    7: '7',
+    maj7: 'maj7',
+    m7: '7',
+    m7b5: 'ø7',
+    dim7: '°7',
+    aug7: '+7',
+    '7sus4': '7sus4',
+    add9: 'add9',
+    madd9: 'add9',
+    maj9: 'maj9',
+    9: '9',
+    m9: '9',
+    11: '11',
+    m11: '11',
+    13: '13',
+    maj13: 'maj13',
+    '6/9': '6/9',
+});
+/** Chord qualities that are plain triads (figured bass 6 / 64). */
+const TRIAD_QUALITIES = new Set(['maj', 'min', 'dim', 'aug']);
+/** Chord qualities that are seventh chords (figured bass 65 / 43 / 42). */
+const SEVENTH_QUALITIES = new Set(['7', 'maj7', 'm7', 'm7b5', 'dim7', 'aug7']);
+/**
+ * Roman numeral for an inverted chord: triads take 6 / 64, seventh chords take
+ * 65 / 43 / 42 and lose their trailing 7 (`G7` in third inversion is `V42`, not
+ * `V742`). Qualities without a conventional figure return null, and the caller
+ * falls back to a slash notation.
+ */
+function figuredRoman(numeral, suffix, quality, inversion) {
+    const tones = new Set(CHORDS[quality].semis.map((semi) => ((semi % 12) + 12) % 12)).size;
+    if (tones === 3 && TRIAD_QUALITIES.has(quality))
+        return `${numeral}${suffix}${['', '6', '64'][inversion] ?? ''}`;
+    if (tones === 4 && SEVENTH_QUALITIES.has(quality))
+        return `${numeral}${suffix.slice(0, -1)}${['', '65', '43', '42'][inversion] ?? ''}`;
+    return null;
+}
 //# sourceMappingURL=core.js.map

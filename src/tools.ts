@@ -1,5 +1,5 @@
 /**
- * Tool definitions for dsh-musictheory: ten deterministic music-theory tools
+ * Tool definitions for dsh-musictheory: twelve deterministic music-theory tools
  * exposed to every agent via defineTool. Strict JSON-schema parameter surfaces,
  * explicit result interfaces matching the inferred output types.
  *
@@ -10,6 +10,7 @@ import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import {
   accidentalName,
   analyzeInterval,
+  analyzeProgression,
   buildChord,
   buildIntervalTarget,
   centsDeviation,
@@ -25,16 +26,21 @@ import {
   INTERVAL_ALIAS_KEYS,
   INTERVAL_NAMES,
   INTERVALS,
+  keySignature,
+  MAX_FIFTHS,
   midiToFrequency,
   noteName,
+  parseKeySpec,
   parseNote,
   resolveIntervalName,
   resolveScaleType,
   SCALE_TYPES,
   type ChordCandidate,
   type HarmonyChord,
+  type KeyMode,
   type NoteData,
   type ParsedNote,
+  type RomanChord,
   type ScaleCandidate,
 } from './core.ts'
 import type { ResolvedConfig } from './index.ts'
@@ -53,6 +59,8 @@ export interface ToolSet {
   transpose: ToolDefinition
   chord_identify: ToolDefinition
   scale_identify: ToolDefinition
+  key_signature: ToolDefinition
+  roman_numeral: ToolDefinition
 }
 
 export interface NoteInfoResult {
@@ -167,6 +175,36 @@ export interface ScaleIdentifyResult {
   error?: string
 }
 
+export interface KeySignatureResult {
+  valid: boolean
+  key?: string
+  tonic?: string
+  mode?: KeyMode
+  fifths?: number
+  accidentals?: string[]
+  accidentalCount?: number
+  signature?: string
+  relative?: string
+  parallel?: string
+  enharmonic?: string
+  practical?: boolean
+  notes?: string[]
+  modeAssumed?: boolean
+  error?: string
+}
+
+export interface RomanNumeralResult {
+  valid: boolean
+  key?: string
+  mode?: KeyMode
+  fifths?: number
+  progression?: string
+  chords?: RomanChord[]
+  diatonicCount?: number
+  modeAssumed?: boolean
+  error?: string
+}
+
 /** Reject obviously bad A4 references; fall back to the configured default. */
 function validA4(a4Hz: number | undefined, config: ResolvedConfig): number | null {
   if (a4Hz === undefined) return config.a4Hz
@@ -264,6 +302,30 @@ function renderScaleIdentify(value: unknown): string {
   const more = r.truncated === true ? ` (+${r.total! - candidates.length} more)` : ''
   const tail = others.length === 0 ? '' : `\n  other readings: ${others}${more}`
   return `${r.notes!.join(' ')} (${r.mode}): ${head}${tail}`
+}
+
+function renderKeySignature(value: unknown): string {
+  const r = value as KeySignatureResult
+  if (!r.valid) return `cannot resolve key signature: ${r.error ?? 'unknown error'}`
+  const accs = (r.accidentals ?? []).join(' ')
+  const listing = r.accidentalCount === 0 ? r.signature! : `${r.signature} (${accs})`
+  const enh = r.enharmonic === undefined ? '' : ` — same key written ${r.enharmonic}`
+  const theory = r.practical === true ? '' : ' (theoretical: needs double accidentals)'
+  const assumed = r.modeAssumed === true ? ' (mode defaulted to major)' : ''
+  return `${r.key}${assumed}: ${listing}${theory}${enh}\n  relative ${r.relative} · parallel ${r.parallel}\n  notes: ${(r.notes ?? []).join(' ')}`
+}
+
+function renderRomanNumeral(value: unknown): string {
+  const r = value as RomanNumeralResult
+  if (!r.valid) return `cannot analyze progression: ${r.error ?? 'unknown error'}`
+  const chords = r.chords ?? []
+  const assumed = r.modeAssumed === true ? ' (mode defaulted to major)' : ''
+  const head = `${r.key}${assumed}: ${chords.map((c) => c.symbol).join(' ')} -> ${r.progression}`
+  const lines = chords.map((c) => {
+    const mark = c.diatonic ? '✓' : c.inKey ? '◐' : '✗'
+    return `  ${c.symbol.padEnd(6)} ${c.roman.padEnd(8)} ${c.notes.join(' ').padEnd(14)} ${mark} (key chord here: ${c.keyTriad})`
+  })
+  return `${head}\n${lines.join('\n')}\n  ${r.diatonicCount}/${chords.length} diatonic · ✓ diatonic  ◐ in key but altered  ✗ borrowed`
 }
 
 /** Build all ten tool definitions from the resolved config. */
@@ -862,5 +924,164 @@ export function buildMusicTools(config: ResolvedConfig): ToolSet {
     },
   })
 
-  return { note_info, freq_to_note, chord_build, scale_generate, interval_build, interval_info, scale_harmonize, transpose, chord_identify, scale_identify }
+  const key_signature = defineTool({
+    name: 'key_signature',
+    description: 'Look up a key signature instead of counting sharps by hand. Ask by key name ("Eb", "F# minor") '
+      + 'or by circle-of-fifths position (fifths -3 = Eb major = 3 flats, fifths 3 = A major = 3 sharps). Returns the '
+      + 'accidentals in written order (F# C# G#, or Bb Eb Ab), the relative key (same signature, other mode), the '
+      + 'parallel key (same tonic, other mode), the enharmonic spelling when one exists inside seven accidentals '
+      + '(C# major = Db major) and the spelled scale of the key. Signatures beyond seven accidentals are reported with '
+      + 'practical: false because they need double sharps — use the enharmonic field for everyday writing.',
+    parameters: {
+      key: { type: 'string', description: 'Key name, e.g. "Eb", "C# minor", "Bb major". A bare note name means major unless mode is given. Exactly one of key/fifths.' },
+      fifths: { type: 'number', description: `Signed circle-of-fifths position: 0 = C major / A minor, 1 = G major (one sharp), -3 = Eb major (three flats). Range -${MAX_FIFTHS}..${MAX_FIFTHS}. Exactly one of key/fifths.` },
+      mode: { type: 'string', enum: ['major', 'minor'], description: 'Major or minor. Used with fifths, or to resolve a bare key name ("C" is C major, mode: "minor" makes it C minor).' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          valid: { type: 'boolean', required: true },
+          key: { type: 'string' },
+          tonic: { type: 'string' },
+          mode: { type: 'string', enum: ['major', 'minor'] },
+          fifths: { type: 'number' },
+          accidentals: { type: 'array', items: { type: 'string' } },
+          accidentalCount: { type: 'number' },
+          signature: { type: 'string' },
+          relative: { type: 'string' },
+          parallel: { type: 'string' },
+          enharmonic: { type: 'string' },
+          practical: { type: 'boolean' },
+          notes: { type: 'array', items: { type: 'string' } },
+          modeAssumed: { type: 'boolean' },
+          error: { type: 'string' },
+        },
+      },
+      render: (_args: { key?: string; fifths?: number }, value: unknown) => [{ type: 'text', text: renderKeySignature(value) }],
+    },
+    async execute(args: { key?: string; fifths?: number; mode?: KeyMode }): Promise<KeySignatureResult> {
+      if (args.key !== undefined && args.fifths !== undefined) {
+        return { valid: false, error: 'give either key or fifths, not both (the key name already decides the signature)' }
+      }
+      if (args.key === undefined && args.fifths === undefined) {
+        return { valid: false, error: 'give a key name (e.g. "Eb") or a circle-of-fifths position (e.g. -3)' }
+      }
+      let signature
+      let modeAssumed = false
+      if (args.fifths !== undefined) {
+        if (!Number.isInteger(args.fifths) || Math.abs(args.fifths) > MAX_FIFTHS) {
+          return { valid: false, error: `fifths must be a whole number between -${MAX_FIFTHS} and ${MAX_FIFTHS} (got ${args.fifths}); wider signatures would need triple accidentals` }
+        }
+        const byFifths = keySignature(args.fifths, args.mode ?? 'major')
+        if (byFifths === null) {
+          return { valid: false, error: `fifths ${args.fifths} is outside the spellable range -${MAX_FIFTHS}..${MAX_FIFTHS}` }
+        }
+        signature = byFifths
+        modeAssumed = args.mode === undefined
+      } else {
+        const parsed = parseKeySpec(args.key!, args.mode)
+        if (parsed === null) {
+          return { valid: false, error: `unrecognized key "${args.key}" (expect e.g. "C major", "Eb", "F# minor")` }
+        }
+        signature = parsed.signature
+        modeAssumed = parsed.modeAssumed
+      }
+      const result: KeySignatureResult = {
+        valid: true,
+        key: signature.key,
+        tonic: signature.tonic,
+        mode: signature.mode,
+        fifths: signature.fifths,
+        accidentals: signature.accidentals,
+        accidentalCount: signature.accidentalCount,
+        signature: signature.signature,
+        relative: signature.relative,
+        parallel: signature.parallel,
+        practical: signature.practical,
+        notes: signature.notes,
+      }
+      if (signature.enharmonic !== undefined) result.enharmonic = signature.enharmonic
+      if (modeAssumed) result.modeAssumed = true
+      return result
+    },
+  })
+
+  const ROMAN_CHORD_SCHEMA = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      symbol: { type: 'string', required: true },
+      root: { type: 'string', required: true },
+      quality: { type: 'string', required: true },
+      degree: { type: 'number', required: true },
+      accidental: { type: 'number', required: true },
+      roman: { type: 'string', required: true },
+      inKey: { type: 'boolean', required: true },
+      diatonic: { type: 'boolean', required: true },
+      keyTriad: { type: 'string', required: true },
+      notes: { type: 'array', items: { type: 'string' }, required: true },
+      bass: { type: 'string' },
+      inversion: { type: 'number' },
+      bassInChord: { type: 'boolean' },
+    },
+  } as const
+
+  const roman_numeral = defineTool({
+    name: 'roman_numeral',
+    description: 'Analyze a chord progression in a key and return roman numerals: ["Am","F","C","G"] in C major '
+      + 'is vi IV I V. The scale degree comes from the written letter, not the pitch class, so in C major A# is #vi '
+      + 'while Bb is bVII — the same key on the piano, two different functions on paper. Each chord reports its degree, '
+      + 'the chromatic alteration, the correctly spelled chord tones, whether every tone belongs to the key (inKey) and '
+      + 'whether the chord equals the key\'s own chord of that size on that degree (diatonic), plus the key triad on '
+      + 'that degree as a reference (degree 7 in major is vii°). Slash chords get figured-bass labels: C/E in C major '
+      + 'is I6, G7/F is V42; a non-chord bass stays as a slash (C/D -> I/D with bassInChord: false). Minor keys are '
+      + 'analyzed with the natural minor scale, so the raised leading tone of harmonic minor comes back as #vii.',
+    parameters: {
+      key: { type: 'string', required: true, description: 'Key name, e.g. "C major", "F# minor", "Eb". A bare note name means major unless mode is given.' },
+      chords: { type: 'array', items: { type: 'string' }, required: true, description: '1-16 chord symbols in order, e.g. ["Am","F","C","G"] or ["Cmaj7","Am7","Dm7","G7"]. Qualities come from the chord_build table; slash chords like "C/E" are allowed.' },
+      mode: { type: 'string', enum: ['major', 'minor'], description: 'Resolve a bare key name as major or minor ("C" + minor = C minor).' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          valid: { type: 'boolean', required: true },
+          key: { type: 'string' },
+          mode: { type: 'string', enum: ['major', 'minor'] },
+          fifths: { type: 'number' },
+          progression: { type: 'string' },
+          chords: { type: 'array', items: ROMAN_CHORD_SCHEMA },
+          diatonicCount: { type: 'number' },
+          modeAssumed: { type: 'boolean' },
+          error: { type: 'string' },
+        },
+      },
+      render: (_args: { key: string; chords: string[] }, value: unknown) => [{ type: 'text', text: renderRomanNumeral(value) }],
+    },
+    async execute(args: { key?: string; chords?: string[]; mode?: KeyMode }): Promise<RomanNumeralResult> {
+      const spec = args.key?.trim()
+      if (spec === undefined || spec === '') return { valid: false, error: 'key is required, e.g. "C major" or "A minor"' }
+      const symbols = args.chords ?? []
+      const analyzed = analyzeProgression(spec, symbols, args.mode)
+      if (!analyzed.ok) return { valid: false, error: analyzed.error }
+      const value = analyzed.value
+      const parsed = parseKeySpec(spec, args.mode)
+      const result: RomanNumeralResult = {
+        valid: true,
+        key: value.key,
+        mode: value.mode,
+        fifths: value.fifths,
+        progression: value.progression,
+        chords: value.chords,
+        diatonicCount: value.diatonicCount,
+      }
+      if (parsed !== null && parsed.modeAssumed) result.modeAssumed = true
+      return result
+    },
+  })
+
+  return { note_info, freq_to_note, chord_build, scale_generate, interval_build, interval_info, scale_harmonize, transpose, chord_identify, scale_identify, key_signature, roman_numeral }
 }

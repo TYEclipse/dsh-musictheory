@@ -186,7 +186,7 @@ describe('scale_identify tool', () => {
 
   it('is registered with the other tools and renders a readable answer', () => {
     const names = Object.keys(builtTools)
-    expect(names).toHaveLength(10)
+    expect(names).toHaveLength(12)
     expect(names).toContain('scale_identify')
     expect(builtTools.scale_identify.name).toBe('scale_identify')
   })

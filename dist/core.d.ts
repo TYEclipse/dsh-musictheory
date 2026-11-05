@@ -327,4 +327,136 @@ export declare function stripOctave(name: string): string;
  * distinct pitch classes (too little information to name a scale).
  */
 export declare function identifyScale(notes: ParsedNote[], limit?: number): ScaleIdentification | null;
+/** Key mode handled by the key-signature engine. */
+export type KeyMode = 'major' | 'minor';
+/**
+ * Widest key signature this module will spell: 11 sharps/flats (the seventh
+ * accidental doubles). Anything wider would need a triple accidental, which
+ * no conventional notation uses.
+ */
+export declare const MAX_FIFTHS = 11;
+/** A fully resolved key signature. */
+export interface KeySignature {
+    /** Readable key name, e.g. "Eb major", "C# minor". */
+    key: string;
+    /** Tonic without octave, e.g. "Eb". */
+    tonic: string;
+    mode: KeyMode;
+    /** Signed position on the circle of fifths (positive = sharps). */
+    fifths: number;
+    /** The accidentals in signature order, e.g. ["Bb","Eb","Ab"]. */
+    accidentals: string[];
+    /** How many accidentals the signature carries (always >= 0). */
+    accidentalCount: number;
+    /** Human summary of the signature, e.g. "3 flats" / "no accidentals". */
+    signature: string;
+    /** Relative key (same signature, other mode), e.g. "C minor". */
+    relative: string;
+    /** Parallel key (same tonic, other mode), e.g. "Eb minor". */
+    parallel: string;
+    /** Enharmonic key inside the seven-accidental range; absent when there is none. */
+    enharmonic?: string;
+    /** True when the signature stays within the usual seven sharps/flats. */
+    practical: boolean;
+    /** Spelled scale notes of the key, tonic first, without octaves. */
+    notes: string[];
+}
+/**
+ * Resolve a signed circle-of-fifths position into a key signature.
+ *
+ * `fifths = 0` is C major / A minor, positive values are sharp keys
+ * (1 = G major, 7 = C# major), negative values flat keys (-1 = F major,
+ * -7 = Cb major). Signatures beyond seven accidentals still resolve (they
+ * need double sharps or double flats) but are flagged `practical: false`.
+ * Returns null when |fifths| > 11 (that would need a triple accidental).
+ */
+export declare function keySignature(fifths: number, mode?: KeyMode): KeySignature | null;
+/**
+ * Resolve the circle-of-fifths position of a written tonic, e.g. "Eb" → -3,
+ * "F#" → 6, "Cb" → -7, "A" as a minor tonic → 0. Returns null when the
+ * spelling is not a key this module can spell.
+ */
+export declare function fifthsOfTonic(letterIndex: number, accidental: number, mode: KeyMode): number | null;
+/** Parse a key spec like "Eb", "F# minor", "Bb major", "c#min". */
+export declare function parseKeySpec(spec: string, modeOverride?: KeyMode): {
+    signature: KeySignature;
+    modeAssumed: boolean;
+} | null;
+/** A chord symbol parsed into root, quality and optional slash bass. */
+export interface ParsedChordSymbol {
+    /** The symbol as written, trimmed. */
+    symbol: string;
+    root: ParsedNote;
+    /** Canonical quality key from the chord table. */
+    quality: string;
+    /** Slash bass when the symbol names one. */
+    bass?: ParsedNote;
+}
+/** Map a written chord suffix to a canonical chord-table quality. */
+export declare function resolveChordQuality(text: string): string | null;
+/**
+ * Parse a chord symbol like "C", "Am", "F#m7b5", "Bb7", "C/E", "D6/9".
+ * Returns null when the root, the slash bass or the quality is not
+ * recognized — no quality is ever guessed from a partial match.
+ */
+export declare function parseChordSymbol(symbol: string): ParsedChordSymbol | null;
+/** One analyzed chord of a progression. */
+export interface RomanChord {
+    /** The symbol as written, e.g. "Am7". */
+    symbol: string;
+    /** Spelled root, e.g. "A". */
+    root: string;
+    /** Canonical quality key, e.g. "m7". */
+    quality: string;
+    /** Scale degree 1-7 the root is written on. */
+    degree: number;
+    /** Semitones the written root sits above that degree (-2 … +2). */
+    accidental: number;
+    /** Roman numeral with quality and figured bass, e.g. "vi7", "bVII", "I6". */
+    roman: string;
+    /** True when every chord tone belongs to the key's scale. */
+    inKey: boolean;
+    /** True when the chord equals the key's own chord of the same size on that degree. */
+    diatonic: boolean;
+    /** Roman numeral of the key's own triad on that degree, e.g. "vii°". */
+    keyTriad: string;
+    /** Spelled chord tones, root first (no octaves). */
+    notes: string[];
+    /** Slash bass as written. */
+    bass?: string;
+    /** Inversion index when the bass is a chord tone (0 = root position). */
+    inversion?: number;
+    /** False when the slash bass is not a chord tone (e.g. C/D). */
+    bassInChord?: boolean;
+}
+/** Result of analyzing a chord progression in a key. */
+export interface RomanAnalysis {
+    /** Readable key name, e.g. "C major". */
+    key: string;
+    mode: KeyMode;
+    fifths: number;
+    /** Roman numerals of the whole progression, e.g. "vi IV I V". */
+    progression: string;
+    chords: RomanChord[];
+    /** How many chords are diatonic to the key. */
+    diatonicCount: number;
+}
+/**
+ * Analyze a progression of chord symbols in a key.
+ *
+ * The scale degree is decided by the written letter, not by the pitch class:
+ * in C major, `A#` is `#vi` and `Bb` is `bVII` (same key on the piano, two
+ * different functions on paper). Chord qualities come from the same table as
+ * `chord_build`, so `diatonic` can be checked against the key's own chord of
+ * the same size, and slash basses get figured-bass labels (`C/E` → `I6`,
+ * `G7/F` → `V42`). Chords whose tones leave the key are reported with
+ * `inKey: false` instead of being forced into a degree.
+ */
+export declare function analyzeProgression(spec: string, symbols: string[], modeOverride?: KeyMode): {
+    ok: true;
+    value: RomanAnalysis;
+} | {
+    ok: false;
+    error: string;
+};
 //# sourceMappingURL=core.d.ts.map

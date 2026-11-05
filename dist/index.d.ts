@@ -12,6 +12,8 @@
  *   transpose       — spelling-aware transposition up/down (G# up a M3 = B#)
  *   chord_identify  — identify the chord behind played notes (C6 <-> Am7 ambiguity)
  *   scale_identify  — fit scales to played notes (C major set = also D dorian, A minor …)
+ *   key_signature   — circle of fifths: accidentals, relative/parallel/enharmonic keys
+ *   roman_numeral   — roman numerals of a progression in a key (Am F C G in C = vi IV I V)
  *
  * Agents get music theory wrong in predictable ways: wrong frequencies, wrong
  * sharp/flat counts, and enharmonic mistakes (writing G# C D# for G# major).

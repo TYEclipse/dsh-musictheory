@@ -1,7 +1,7 @@
 /**
  * dsh-musictheory — deterministic music theory math for DeepSeek Harness.
  *
- * Ten zero-dependency tools (pure 12-TET arithmetic):
+ * Thirteen zero-dependency tools (pure 12-TET arithmetic):
  *   note_info       — parse a note name into MIDI / octave / pitch class / frequency + enharmonics
  *   freq_to_note    — frequency in Hz -> nearest note, cents deviation and spellings
  *   chord_build     — correctly spelled chords for 26 qualities (G# major is G# B# D#)
@@ -14,6 +14,7 @@
  *   scale_identify  — fit scales to played notes (C major set = also D dorian, A minor …)
  *   key_signature   — circle of fifths: accidentals, relative/parallel/enharmonic keys
  *   roman_numeral   — roman numerals of a progression in a key (Am F C G in C = vi IV I V)
+ *   progression_build — numerals back into spelled chords (vi IV I6 V in C = Am F C/E G)
  *
  * Agents get music theory wrong in predictable ways: wrong frequencies, wrong
  * sharp/flat counts, and enharmonic mistakes (writing G# C D# for G# major).

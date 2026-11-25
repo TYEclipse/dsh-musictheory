@@ -1,5 +1,5 @@
 /**
- * Tool definitions for dsh-musictheory: twelve deterministic music-theory tools
+ * Tool definitions for dsh-musictheory: thirteen deterministic music-theory tools
  * exposed to every agent via defineTool. Strict JSON-schema parameter surfaces,
  * explicit result interfaces matching the inferred output types.
  *
@@ -13,6 +13,7 @@ import {
   analyzeProgression,
   buildChord,
   buildIntervalTarget,
+  buildProgression,
   centsDeviation,
   CHORD_QUALITIES,
   DEFAULT_A4,
@@ -35,6 +36,8 @@ import {
   resolveIntervalName,
   resolveScaleType,
   SCALE_TYPES,
+  type BuiltProgression,
+  type BuiltRomanChord,
   type ChordCandidate,
   type HarmonyChord,
   type KeyMode,
@@ -61,6 +64,7 @@ export interface ToolSet {
   scale_identify: ToolDefinition
   key_signature: ToolDefinition
   roman_numeral: ToolDefinition
+  progression_build: ToolDefinition
 }
 
 export interface NoteInfoResult {
@@ -205,6 +209,19 @@ export interface RomanNumeralResult {
   error?: string
 }
 
+export interface ProgressionBuildResult {
+  valid: boolean
+  key?: string
+  mode?: KeyMode
+  fifths?: number
+  progression?: string
+  symbols?: string
+  chords?: BuiltRomanChord[]
+  diatonicCount?: number
+  modeAssumed?: boolean
+  error?: string
+}
+
 /** Reject obviously bad A4 references; fall back to the configured default. */
 function validA4(a4Hz: number | undefined, config: ResolvedConfig): number | null {
   if (a4Hz === undefined) return config.a4Hz
@@ -328,7 +345,21 @@ function renderRomanNumeral(value: unknown): string {
   return `${head}\n${lines.join('\n')}\n  ${r.diatonicCount}/${chords.length} diatonic · ✓ diatonic  ◐ in key but altered  ✗ borrowed`
 }
 
-/** Build all ten tool definitions from the resolved config. */
+function renderProgressionBuild(value: unknown): string {
+  const r = value as ProgressionBuildResult
+  if (!r.valid) return `cannot build progression: ${r.error ?? 'unknown error'}`
+  const chords = r.chords ?? []
+  const assumed = r.modeAssumed === true ? ' (mode defaulted to major)' : ''
+  const head = `${r.key}${assumed}: ${r.progression} -> ${r.symbols}`
+  const lines = chords.map((c) => {
+    const mark = c.diatonic ? '✓' : c.inKey ? '◐' : '✗'
+    const figure = c.figure === undefined ? '' : ` [${c.figure}]`
+    return `  ${c.numeral.padEnd(6)} ${c.symbol.padEnd(8)} ${c.roman.padEnd(8)}${figure} ${c.notes.join(' ').padEnd(14)} ${mark}`
+  })
+  return `${head}\n${lines.join('\n')}\n  ${r.diatonicCount}/${chords.length} diatonic · ✓ diatonic  ◐ in key but altered  ✗ borrowed`
+}
+
+/** Build all thirteen tool definitions from the resolved config. */
 export function buildMusicTools(config: ResolvedConfig): ToolSet {
   const note_info = defineTool({
     name: 'note_info',
@@ -1083,5 +1114,82 @@ export function buildMusicTools(config: ResolvedConfig): ToolSet {
     },
   })
 
-  return { note_info, freq_to_note, chord_build, scale_generate, interval_build, interval_info, scale_harmonize, transpose, chord_identify, scale_identify, key_signature, roman_numeral }
+  const BUILT_CHORD_SCHEMA = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      numeral: { type: 'string', required: true },
+      roman: { type: 'string', required: true },
+      symbol: { type: 'string', required: true },
+      root: { type: 'string', required: true },
+      quality: { type: 'string', required: true },
+      notes: { type: 'array', items: { type: 'string' }, required: true },
+      inKey: { type: 'boolean', required: true },
+      diatonic: { type: 'boolean', required: true },
+      keyTriad: { type: 'string', required: true },
+      figure: { type: 'string' },
+      inversion: { type: 'number' },
+      bass: { type: 'string' },
+    },
+  } as const
+
+  const progression_build = defineTool({
+    name: 'progression_build',
+    description: 'Turn roman numerals into spelled chords — the inverse of roman_numeral. In C major, '
+      + '["vi","IV","I6","V7"] comes out as Am F C/E G7 with the chord tones spelled on the right letters. Case '
+      + 'decides the quality of a bare numeral (I = major triad, i = minor triad), accidentals are read against the '
+      + "key's own scale (#vi in C is A#, bVII in C is Bb), and qualities ride on the numeral: V7, vii°7, viiø7, "
+      + 'Isus4, iadd9, I6/9. Figures are read as inversions, which is what they mean in analysis — I6 is a '
+      + 'first-inversion triad (C/E), V65 is a seventh chord in first inversion, V43 in second, V42 in third; the '
+      + 'added-sixth chord prints identically as I6, so ask for it with qualities: ["6"]. Secondary dominants (V/V) '
+      + 'are rejected rather than guessed. Every built chord is re-analyzed, so roman, inKey and diatonic always agree '
+      + 'with what roman_numeral would say about the same chord.',
+    parameters: {
+      key: { type: 'string', required: true, description: 'Key name, e.g. "C major", "Eb", "F# minor". A bare note name means major unless mode is given.' },
+      numerals: { type: 'array', items: { type: 'string' }, required: true, description: '1-16 roman numerals in order, e.g. ["vi","IV","I","V"] or ["ii7","V65","I"]. Accidentals #/b/#b are allowed on the degree; figures 6/64/65/43/42 mean inversions.' },
+      qualities: { type: 'array', items: { type: 'string' }, description: 'Optional per-numeral quality override (same names chord_build takes, one entry per numeral). Needed when the numeral notation is ambiguous, e.g. ["6"] for an added-sixth chord on I.' },
+      mode: { type: 'string', enum: ['major', 'minor'], description: 'Resolve a bare key name as major or minor ("C" + minor = C minor).' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          valid: { type: 'boolean', required: true },
+          key: { type: 'string' },
+          mode: { type: 'string', enum: ['major', 'minor'] },
+          fifths: { type: 'number' },
+          progression: { type: 'string' },
+          symbols: { type: 'string' },
+          chords: { type: 'array', items: BUILT_CHORD_SCHEMA },
+          diatonicCount: { type: 'number' },
+          modeAssumed: { type: 'boolean' },
+          error: { type: 'string' },
+        },
+      },
+      render: (_args: { key: string; numerals: string[] }, value: unknown) => [{ type: 'text', text: renderProgressionBuild(value) }],
+    },
+    async execute(args: { key?: string; numerals?: string[]; qualities?: string[]; mode?: KeyMode }): Promise<ProgressionBuildResult> {
+      const spec = args.key?.trim()
+      if (spec === undefined || spec === '') return { valid: false, error: 'key is required, e.g. "C major" or "A minor"' }
+      const built = buildProgression(spec, args.numerals ?? [], args.qualities, args.mode)
+      if (!built.ok) return { valid: false, error: built.error }
+      const value: BuiltProgression = built.value
+      const result: ProgressionBuildResult = {
+        valid: true,
+        key: value.key,
+        mode: value.mode,
+        fifths: value.fifths,
+        progression: value.progression,
+        symbols: value.symbols,
+        chords: value.chords,
+        diatonicCount: value.diatonicCount,
+      }
+      const parsed = parseKeySpec(spec, args.mode)
+      if (parsed !== null && parsed.modeAssumed) result.modeAssumed = true
+      return result
+    },
+  })
+
+  return { note_info, freq_to_note, chord_build, scale_generate, interval_build, interval_info, scale_harmonize, transpose, chord_identify, scale_identify, key_signature, roman_numeral, progression_build }
 }

@@ -459,4 +459,65 @@ export declare function analyzeProgression(spec: string, symbols: string[], mode
     ok: false;
     error: string;
 };
+/** One chord built from a roman numeral. */
+export interface BuiltRomanChord {
+    /** The numeral as written, e.g. "bVII", "V65". */
+    numeral: string;
+    /** Canonical numeral after re-analysis, e.g. "bVII", "V43". */
+    roman: string;
+    /** Chord symbol that `chord_build`/`roman_numeral` understand, e.g. "C/E". */
+    symbol: string;
+    /** Spelled root without octave, e.g. "Bb". */
+    root: string;
+    /** Canonical quality key from the chord table, e.g. "m7". */
+    quality: string;
+    /** Spelled chord tones, root first (no octaves). */
+    notes: string[];
+    /** True when every chord tone belongs to the key's scale. */
+    inKey: boolean;
+    /** True when the chord equals the key's own chord of that size on that degree. */
+    diatonic: boolean;
+    /** Roman numeral of the key's own triad on that degree, e.g. "vii°". */
+    keyTriad: string;
+    /** Figured-bass figure that was read as an inversion, e.g. "6" or "65". */
+    figure?: string;
+    /** Inversion index when a figure was applied (0 = root position). */
+    inversion?: number;
+    /** Spelled bass when a figure was applied. */
+    bass?: string;
+}
+/** Result of building a progression out of roman numerals. */
+export interface BuiltProgression {
+    /** Readable key name, e.g. "C major". */
+    key: string;
+    mode: KeyMode;
+    fifths: number;
+    /** Canonical numerals of the built chords, e.g. "vi IV I V". */
+    progression: string;
+    /** Chord symbols of the built chords, e.g. "Am F C G". */
+    symbols: string;
+    chords: BuiltRomanChord[];
+    diatonicCount: number;
+}
+/**
+ * Build the chords a numeral progression spells in a key — the inverse of
+ * `analyzeProgression`.
+ *
+ * The root is decided by the written degree, so in C major `#vi` is A# and
+ * `bVII` is Bb (same key on the piano, two different functions on paper);
+ * chord tones come from the same table as `chord_build`, so `I` in Eb major is
+ * Eb G Bb. Numerals carrying figures are read as inversions (`I6` = first
+ * inversion triad), and the built symbol is re-analyzed so the returned
+ * `roman`/`inKey`/`diatonic` facts cannot drift from `roman_numeral`.
+ * `qualities` overrides the quality per numeral when the numeral notation is
+ * ambiguous (in analysis `I6` means a first-inversion triad; the added-sixth
+ * chord prints the same way, so ask for it with qualities: ["6"]).
+ */
+export declare function buildProgression(spec: string, numerals: string[], qualities?: string[], modeOverride?: KeyMode): {
+    ok: true;
+    value: BuiltProgression;
+} | {
+    ok: false;
+    error: string;
+};
 //# sourceMappingURL=core.d.ts.map

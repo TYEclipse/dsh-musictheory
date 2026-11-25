@@ -15,7 +15,7 @@ DeepSeek Harness（`dsh`）的音乐理论数学工具箱——零运行时依�
 
 本插件用确定性表格 + 拼写引擎全部代劳。
 
-## 工具（12 个）
+## 工具（13 个）
 
 | 工具 | 功能 |
 |------|------|
@@ -31,6 +31,7 @@ DeepSeek Harness（`dsh`）的音乐理论数学工具箱——零运行时依�
 | `scale_identify` | 由 3—12 个音反推音阶（`scale_generate` 的逆运算）：`C D E F G A B` → `C major`，同时给出 `A natural minor`、`D dorian` 等同音级集合的调式；`C D E G A` 既是 `C major pentatonic` 也是 `A minor pentatonic`；`A B C D E F G#` 唯一命中 `A harmonic minor`。拼写一致者优先：`C# D# E# F# G# A# B#` 是 `C# major`，不会给同音异名的 `Db major`。若没有音阶恰好吻合，`mode: "contains"` 给出包含全部音的音阶并列出缺失音（`C E G` → `C major pentatonic`，缺 `D A`） |
 | `key_signature` | 调号查询，不用手数升降号：按调名（`Eb`、`F# minor`）或五度圈位置（`fifths: -3` = 三个降号）问，返回**书写顺序的升降号**（`Bb Eb Ab`）、关系调（同调号异调式）、同主音调（同主音异调式）、七升七降范围内的**同音异名调**（`C# major` = `Db major`）与该调音阶拼写；超过七个升降号的调标 `practical: false`（需要重升重降），日常改用它给的 `enharmonic` |
 | `roman_numeral` | 和弦进行的罗马数字分析：C 大调里 `Am F C G` → `vi IV I V`。级数由**音名字母**决定而不是音级（C 大调里 `A#` 是 `#VI`、`Bb` 是 `bVII`，钢琴上同一个键、谱面上两个功能），每个和弦给出级数、变音、正确拼写的和弦音、是否全在本调（`inKey`）、是否就是本调该级同规模的和弦（`diatonic`），并给该级本调和弦作参照（大调第 7 级是 `vii°`）。斜线和弦给数字低音标记：`C/E` → `I6`、`G7/F` → `V42`；低音不是和弦音就保留斜线（`C/D` → `I/D`）。小调按自然小调分析，和声小调的升七级会显示成 `#vii` |
+| `progression_build` | 罗马数字反向生成和弦——`roman_numeral` 的逆运算：C 大调里 `vi IV I6 V` → `Am F C/E G`。裸数字的大小写决定和弦性质（`I` 大三和弦、`i` 小三和弦），变音对**本调音阶**读（C 大调里 `#vi` 是 `A#`、`bVII` 是 `Bb`），性质写在数字上（`V7`、`viiø7`、`Isus4`、`I6/9`）。数字低音按转位读：`I6` = `C/E`、`V65` = `G7/B`、`V43` = `G7/D`、`V42` = `G7/F`；加六度和弦的写法与 `I6` 相同，要用 `qualities: ["6"]` 点名。副属和弦（`V/V`）直接拒绝而不猜；每个生成的和弦都会重新分析一遍，`roman`/`inKey`/`diatonic` 与 `roman_numeral` 永远一致 |
 
 ## 安装
 

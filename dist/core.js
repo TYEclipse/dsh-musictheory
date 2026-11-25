@@ -1277,4 +1277,207 @@ function figuredRoman(numeral, suffix, quality, inversion) {
         return `${numeral}${suffix.slice(0, -1)}${['', '65', '43', '42'][inversion] ?? ''}`;
     return null;
 }
+/** Degree index (0-based) for a roman numeral letter run. */
+const NUMERAL_LETTERS = Object.freeze({
+    I: 0, II: 1, III: 2, IV: 3, V: 4, VI: 5, VII: 6,
+});
+/**
+ * Suffix → qualities. Case decides the quality whenever the numeral itself
+ * carries no quality mark (I = major triad, i = minor triad). Figures 6 / 64
+ * and 65 / 43 / 42 are read as inversions, which is what they mean in
+ * analysis — the added-sixth chord of the same shape prints identically, so
+ * callers who mean that chord pass `qualities: ["6"]`.
+ */
+const NUMERAL_SUFFIXES = Object.freeze({
+    '': { upper: 'maj', lower: 'min' },
+    '°': { upper: 'dim', lower: 'dim' },
+    '°7': { upper: 'dim7', lower: 'dim7' },
+    'ø7': { upper: 'm7b5', lower: 'm7b5' },
+    '+': { upper: 'aug', lower: 'aug' },
+    '+7': { upper: 'aug7', lower: 'aug7' },
+    '7': { upper: '7', lower: 'm7' },
+    'maj7': { upper: 'maj7', lower: 'maj7' },
+    '9': { upper: '9', lower: 'm9' },
+    '11': { upper: '11', lower: 'm11' },
+    '13': { upper: '13', lower: '13' },
+    'maj9': { upper: 'maj9', lower: 'maj9' },
+    'maj13': { upper: 'maj13', lower: 'maj13' },
+    'add9': { upper: 'add9', lower: 'madd9' },
+    'sus2': { upper: 'sus2', lower: 'sus2' },
+    'sus4': { upper: 'sus4', lower: 'sus4' },
+    '5': { upper: '5', lower: '5' },
+    '7sus4': { upper: '7sus4', lower: '7sus4' },
+    '6/9': { upper: '6/9', lower: '6/9' },
+    '6': { upper: 'maj', lower: 'min', figure: '6' },
+    '64': { upper: 'maj', lower: 'min', figure: '64' },
+    '65': { upper: '7', lower: 'm7', figure: '65' },
+    '43': { upper: '7', lower: 'm7', figure: '43' },
+    '42': { upper: '7', lower: 'm7', figure: '42' },
+});
+/** Suffixes the numeral parser accepts, for error messages. */
+const NUMERAL_SUFFIX_LIST = Object.keys(NUMERAL_SUFFIXES);
+/** Figure → inversion index. */
+const FIGURE_INVERSION = Object.freeze({
+    '6': 1, '64': 2, '65': 1, '43': 2, '42': 3,
+});
+/** Chord-table quality → symbol suffix used in `chord_build` symbols. */
+const QUALITY_SYMBOL = Object.freeze({
+    maj: '', min: 'm', dim: 'dim', aug: 'aug', sus2: 'sus2', sus4: 'sus4', 5: '5',
+    6: '6', m6: 'm6', 7: '7', maj7: 'maj7', m7: 'm7', m7b5: 'm7b5', dim7: 'dim7',
+    aug7: 'aug7', '7sus4': '7sus4', add9: 'add9', madd9: 'madd9', maj9: 'maj9',
+    9: '9', m9: 'm9', 11: '11', m11: 'm11', 13: '13', maj13: 'maj13', '6/9': '6/9',
+});
+/**
+ * Parse one roman numeral: accidentals (#, ##, b, bb), the degree in roman
+ * letters (case decides upper/lower), then an optional quality suffix.
+ * Returns an error string instead of guessing on unknown input.
+ */
+function parseNumeral(text) {
+    const raw = text.trim();
+    if (raw === '')
+        return 'empty numeral (every entry needs a degree such as I, vi, V7)';
+    if (/\/([IViv]+)$/.test(raw)) {
+        return `secondary dominants like "${raw}" are not supported: this tool builds chords from one key's own degrees`;
+    }
+    const match = /^(#{1,2}|b{1,2})?([IViv]+)(.*)$/.exec(raw);
+    if (match === null)
+        return `unrecognized numeral "${raw}" (expect e.g. "I", "vi", "bVII", "V65")`;
+    const prefix = match[1] ?? '';
+    const letters = match[2];
+    const suffixText = match[3];
+    const accidental = prefix === '' ? 0 : prefix.startsWith('#') ? prefix.length : -prefix.length;
+    const upper = letters === letters.toUpperCase();
+    if (!upper && letters !== letters.toLowerCase())
+        return `mixed-case numeral "${raw}" (write vi or VI, not vI)`;
+    const degree = NUMERAL_LETTERS[letters.toUpperCase()];
+    if (degree === undefined)
+        return `unrecognized degree in "${raw}" (degrees run I..VII)`;
+    const suffix = NUMERAL_SUFFIXES[suffixText];
+    if (suffix === undefined) {
+        return `unrecognized suffix "${suffixText}" in "${raw}" (supported: ${NUMERAL_SUFFIX_LIST.filter((s) => s !== '').join(' ')})`;
+    }
+    const parsed = { numeral: raw, degree, accidental, quality: upper ? suffix.upper : suffix.lower };
+    if (suffix.figure !== undefined)
+        parsed.figure = suffix.figure;
+    return parsed;
+}
+/**
+ * Build the chords a numeral progression spells in a key — the inverse of
+ * `analyzeProgression`.
+ *
+ * The root is decided by the written degree, so in C major `#vi` is A# and
+ * `bVII` is Bb (same key on the piano, two different functions on paper);
+ * chord tones come from the same table as `chord_build`, so `I` in Eb major is
+ * Eb G Bb. Numerals carrying figures are read as inversions (`I6` = first
+ * inversion triad), and the built symbol is re-analyzed so the returned
+ * `roman`/`inKey`/`diatonic` facts cannot drift from `roman_numeral`.
+ * `qualities` overrides the quality per numeral when the numeral notation is
+ * ambiguous (in analysis `I6` means a first-inversion triad; the added-sixth
+ * chord prints the same way, so ask for it with qualities: ["6"]).
+ */
+export function buildProgression(spec, numerals, qualities, modeOverride) {
+    if (numerals.length === 0)
+        return { ok: false, error: 'give at least one numeral (e.g. ["I","V","vi","IV"])' };
+    if (numerals.length > 16)
+        return { ok: false, error: `at most 16 numerals per progression (got ${numerals.length})` };
+    if (qualities !== undefined && qualities.length !== numerals.length) {
+        return { ok: false, error: `qualities must have one entry per numeral (got ${qualities.length} for ${numerals.length} numerals)` };
+    }
+    const parsedKey = parseKeySpec(spec, modeOverride);
+    if (parsedKey === null) {
+        return { ok: false, error: `unrecognized key "${spec}" (expect e.g. "C major", "Eb", "F# minor")` };
+    }
+    const signature = parsedKey.signature;
+    const tonicLetter = tonicLetterForFifths(signature.fifths, signature.mode);
+    const tonicPc = tonicPcForFifths(signature.fifths, signature.mode);
+    const semis = signature.mode === 'major' ? MAJOR_SEMIS : MINOR_SEMIS;
+    const scalePcs = semis.map((semi) => (tonicPc + semi) % 12);
+    const chords = [];
+    for (let i = 0; i < numerals.length; i += 1) {
+        const parsed = parseNumeral(numerals[i]);
+        if (typeof parsed === 'string')
+            return { ok: false, error: parsed };
+        const override = qualities?.[i];
+        let quality = parsed.quality;
+        if (override !== undefined) {
+            const canonical = override in CHORDS ? override : null;
+            if (canonical === null) {
+                return { ok: false, error: `unrecognized quality "${override}" for numeral "${parsed.numeral}" (see chord_build for the quality names)` };
+            }
+            quality = canonical;
+        }
+        const def = CHORDS[quality];
+        const rootLetter = (tonicLetter + parsed.degree) % 7;
+        const rootPc = (((scalePcs[parsed.degree] + parsed.accidental) % 12) + 12) % 12;
+        let rootAccidental;
+        try {
+            rootAccidental = spellOnLetter(rootPc, rootLetter);
+        }
+        catch {
+            return { ok: false, error: `the root of "${parsed.numeral}" in ${signature.key} needs more than a double accidental` };
+        }
+        const rootName = `${LETTERS[rootLetter]}${accidentalName(rootAccidental)}`;
+        let symbol = `${rootName}${QUALITY_SYMBOL[quality] ?? quality}`;
+        const chord = {
+            numeral: parsed.numeral,
+            roman: parsed.numeral,
+            symbol,
+            root: rootName,
+            quality,
+            notes: [],
+            inKey: false,
+            diatonic: false,
+            keyTriad: keyChordRoman(scalePcs, parsed.degree),
+        };
+        if (parsed.figure !== undefined) {
+            const inversion = FIGURE_INVERSION[parsed.figure];
+            const tones = new Set(def.semis.map((semi) => (((rootPc + semi) % 12) + 12) % 12)).size;
+            if (inversion >= tones) {
+                return { ok: false, error: `figure "${parsed.figure}" needs a ${inversion + 1}-note chord, but "${parsed.numeral}" is a ${tones}-note chord` };
+            }
+            const bassLetter = (rootLetter + def.letters[inversion]) % 7;
+            const bassPc = (((rootPc + def.semis[inversion]) % 12) + 12) % 12;
+            let bassAccidental;
+            try {
+                bassAccidental = spellOnLetter(bassPc, bassLetter);
+            }
+            catch {
+                return { ok: false, error: `the bass of "${parsed.numeral}" in ${signature.key} needs more than a double accidental` };
+            }
+            const bassName = `${LETTERS[bassLetter]}${accidentalName(bassAccidental)}`;
+            symbol = `${symbol}/${bassName}`;
+            chord.symbol = symbol;
+            chord.figure = parsed.figure;
+            chord.inversion = inversion;
+            chord.bass = bassName;
+        }
+        const analyzed = analyzeProgression(signature.key, [symbol], signature.mode);
+        if (!analyzed.ok) {
+            return { ok: false, error: `built "${symbol}" from "${parsed.numeral}" but it cannot be analyzed back: ${analyzed.error}` };
+        }
+        const facts = analyzed.value.chords[0];
+        chord.roman = facts.roman;
+        chord.notes = facts.notes;
+        chord.inKey = facts.inKey;
+        chord.diatonic = facts.diatonic;
+        chord.keyTriad = facts.keyTriad;
+        if (facts.bass !== undefined)
+            chord.bass = facts.bass;
+        if (facts.inversion !== undefined)
+            chord.inversion = facts.inversion;
+        chords.push(chord);
+    }
+    return {
+        ok: true,
+        value: {
+            key: signature.key,
+            mode: signature.mode,
+            fifths: signature.fifths,
+            progression: chords.map((c) => c.roman).join(' '),
+            symbols: chords.map((c) => c.symbol).join(' '),
+            chords,
+            diatonicCount: chords.filter((c) => c.diatonic).length,
+        },
+    };
+}
 //# sourceMappingURL=core.js.map

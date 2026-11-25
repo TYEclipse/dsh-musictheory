@@ -623,6 +623,140 @@ ROMAN_CASES = [
 ]
 
 
+# ===================== numerals -> chords (v0.6.0) =====================
+# The inverse direction: numerals in, spelled chords out. Encoded
+# independently of the TS tables (same reason as every other section: an
+# oracle that shares the implementation's table cannot catch a wrong table).
+NUMERAL_DEGREE = {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7}
+# suffix -> (quality when the numeral is upper case, quality when lower case)
+NUMERAL_SUFFIX_QUALITY = {
+    "": ("maj", "min"), "°": ("dim", "dim"), "°7": ("dim7", "dim7"),
+    "ø7": ("m7b5", "m7b5"), "+": ("aug", "aug"), "+7": ("aug7", "aug7"),
+    "7": ("7", "m7"), "maj7": ("maj7", "maj7"), "9": ("9", "m9"),
+    "11": ("11", "m11"), "13": ("13", "13"), "maj9": ("maj9", "maj9"),
+    "maj13": ("maj13", "maj13"), "add9": ("add9", "madd9"),
+    "sus2": ("sus2", "sus2"), "sus4": ("sus4", "sus4"), "5": ("5", "5"),
+    "7sus4": ("7sus4", "7sus4"), "6/9": ("6/9", "6/9"),
+    # figures are read as inversions, so the shape decides the chord family
+    "6": ("maj", "min"), "64": ("maj", "min"),
+    "65": ("7", "m7"), "43": ("7", "m7"), "42": ("7", "m7"),
+}
+NUMERAL_FIGURE = {"6": 1, "64": 2, "65": 1, "43": 2, "42": 3}
+SYMBOL_OF_QUALITY = {
+    "maj": "", "min": "m", "dim": "dim", "aug": "aug", "sus2": "sus2", "sus4": "sus4",
+    "5": "5", "6": "6", "m6": "m6", "7": "7", "maj7": "maj7", "m7": "m7",
+    "m7b5": "m7b5", "dim7": "dim7", "aug7": "aug7", "7sus4": "7sus4",
+    "add9": "add9", "madd9": "madd9", "maj9": "maj9", "9": "9", "m9": "m9",
+    "11": "11", "m11": "m11", "13": "13", "maj13": "maj13", "6/9": "6/9",
+}
+
+ROMAN_BUILD_CASES = [
+    ("C major", ["vi", "IV", "I", "V"], None),
+    ("C major", ["I6", "V65", "I"], None),
+    ("C major", ["V43", "V42"], None),
+    ("Eb major", ["I", "IV", "V7"], None),
+    ("C major", ["bVII", "#iv°"], None),
+    ("A minor", ["i", "iv", "V7", "i"], None),
+    ("C major", ["vii°7"], None),
+    ("F# major", ["viiø7"], None),
+    ("C major", ["I6/9", "IVsus4"], None),
+    ("C major", ["I"], ["6"]),
+    ("Eb major", ["I", "bVII"], None),
+]
+
+
+def key_context(key_spec: str):
+    """-> (tonic letter index, scale pitch classes, mode) for a key spec."""
+    parts = key_spec.strip().split()
+    parsed = parse_note(parts[0])
+    if parsed is None:
+        raise ValueError(key_spec)
+    letter, acc, _oct, _midi = parsed
+    mode = "minor" if len(parts) > 1 and parts[1].lower().startswith("m") and not parts[1].lower().startswith("maj") else "major"
+    li = LETTERS.index(letter)
+    tonic_pc = (DIATONIC_PC[letter] + acc) % 12
+    steps = MINOR_STEPS if mode == "minor" else MAJOR_STEPS
+    return li, [(tonic_pc + s) % 12 for s in steps], mode
+
+
+def parse_numeral(text: str):
+    """-> (degree index 0-6, accidental, quality, figure or None). Raises on junk."""
+    raw = text.strip()
+    if not raw:
+        raise ValueError("empty numeral")
+    if "/" in raw and raw.rsplit("/", 1)[1].strip() in NUMERAL_DEGREE:
+        raise ValueError(f"secondary dominant {raw}")
+    i = 0
+    acc = 0
+    while i < len(raw) and raw[i] in "#b":
+        acc += 1 if raw[i] == "#" else -1
+        i += 1
+    start = i
+    while i < len(raw) and raw[i] in "IViv":
+        i += 1
+    letters = raw[start:i]
+    if not letters:
+        raise ValueError(f"no degree in {raw}")
+    if letters != letters.upper() and letters != letters.lower():
+        raise ValueError(f"mixed case {raw}")
+    degree = NUMERAL_DEGREE.get(letters.upper())
+    if degree is None:
+        raise ValueError(f"bad degree {raw}")
+    suffix = raw[i:]
+    if suffix not in NUMERAL_SUFFIX_QUALITY:
+        raise ValueError(f"bad suffix {raw}")
+    upper, lower = NUMERAL_SUFFIX_QUALITY[suffix]
+    return degree - 1, acc, (upper if letters.isupper() else lower), NUMERAL_FIGURE.get(suffix), suffix
+
+
+def build_roman(key_spec: str, numerals: list[str], qualities: list[str] | None = None):
+    """Numerals -> spelled chords, then re-read them through analyze_roman."""
+    li, scale_pcs, _mode = key_context(key_spec)
+    out = []
+    for index, numeral in enumerate(numerals):
+        degree, acc, quality, figure, suffix = parse_numeral(numeral)
+        if qualities is not None:
+            quality = qualities[index]
+        tones = CHORDS[quality]
+        root_li = (li + degree) % 7
+        root_pc = (scale_pcs[degree] + acc) % 12
+        root_acc = (root_pc - DIATONIC_PC[LETTERS[root_li]] + 6) % 12 - 6
+        root_name = f"{LETTERS[root_li]}{acc_name(root_acc)}"
+        symbol = f"{root_name}{SYMBOL_OF_QUALITY[quality]}"
+        entry: dict[str, object] = {"numeral": numeral, "symbol": symbol, "quality": quality, "root": root_name}
+        if figure is not None:
+            bass_index = figure
+            if bass_index >= len(tones):
+                raise ValueError(f"figure {suffix} does not fit {numeral}")
+            bass_label = tones[bass_index]
+            step = (int("".join(ch for ch in bass_label if ch.isdigit())) - 1) % 7
+            bass_li = (root_li + step) % 7
+            bass_pc = (root_pc + SEMI_OF_LABEL[bass_label]) % 12
+            bass_acc = (bass_pc - DIATONIC_PC[LETTERS[bass_li]] + 6) % 12 - 6
+            bass_name = f"{LETTERS[bass_li]}{acc_name(bass_acc)}"
+            symbol = f"{symbol}/{bass_name}"
+            entry["symbol"] = symbol
+            entry["figure"] = suffix
+            entry["inversion"] = figure
+            entry["bass"] = bass_name
+        facts = analyze_roman(key_spec, [symbol])
+        if facts is None:
+            raise ValueError(f"cannot analyze {symbol}")
+        chord = facts["chords"][0]
+        entry.update({"roman": chord["roman"], "notes": chord["notes"],
+                      "inKey": chord["inKey"], "diatonic": chord["diatonic"],
+                      "keyTriad": chord["keyTriad"]})
+        out.append(entry)
+    return {
+        "key": key_spec,
+        "progression": " ".join(c["roman"] for c in out),
+        "symbols": " ".join(c["symbol"] for c in out),
+        "chords": out,
+        "diatonicCount": sum(1 for c in out if c["diatonic"]),
+    }
+
+
+
 SCALE_CASES = [
     ["C4", "D4", "E4", "F4", "G4", "A4", "B4"],
     ["C4", "D4", "E4", "F#4", "G4", "A4", "B4"],
@@ -887,6 +1021,89 @@ def main(argv: list[str]) -> int:
         good = [c["notes"] for c in res["chords"]] == [["F#", "A#", "C#"], ["B", "D#", "F#"], ["C#", "E#", "G#"]]
         print(f"{'✅' if good else '❌'} F# major I IV V spellings: {[c['notes'] for c in res['chords']]}")
         ok = ok and good
+        # --- progression_build (v0.6.0) ---
+        built = build_roman("C major", ["vi", "IV", "I", "V"])
+        good = built["symbols"] == "Am F C G" and built["progression"] == "vi IV I V"
+        print(f"{'✅' if good else '❌'} C major vi IV I V -> {built['symbols']} ({built['progression']})")
+        ok = ok and good
+        # figures are inversions, and the bass is the chord tone of that index
+        built = build_roman("C major", ["I6", "V65", "V43", "V42"])
+        got = [(c["symbol"], c["inversion"], c["bass"]) for c in built["chords"]]
+        good = got == [("C/E", 1, "E"), ("G7/B", 1, "B"), ("G7/D", 2, "D"), ("G7/F", 3, "F")]
+        print(f"{'✅' if good else '❌'} C major I6 V65 V43 V42 -> {got}")
+        ok = ok and good
+        # accidentals follow the written degree, not the pitch class
+        built = build_roman("C major", ["bVII", "#iv°"])
+        good = [c["root"] for c in built["chords"]] == ["Bb", "F#"]
+        print(f"{'✅' if good else '❌'} C major bVII / #iv° roots -> {[c['root'] for c in built['chords']]}")
+        ok = ok and good
+        # flat keys spell their own letters (Eb major I = Eb G Bb, not D# G A#)
+        built = build_roman("Eb major", ["I", "IV", "V7"])
+        good = (built["symbols"] == "Eb Ab Bb7"
+                and built["chords"][0]["notes"] == ["Eb", "G", "Bb"]
+                and built["chords"][2]["notes"] == ["Bb", "D", "F", "Ab"])
+        print(f"{'✅' if good else '❌'} Eb major I IV V7 -> {built['symbols']} "
+              f"{[c['notes'] for c in built['chords']]}")
+        ok = ok and good
+        # the borrowed major V in minor stays V and is flagged, exactly like analysis says
+        built = build_roman("A minor", ["i", "iv", "V7", "i"])
+        borrowed = built["chords"][2]
+        good = (built["symbols"] == "Am Dm E7 Am" and borrowed["roman"] == "V7"
+                and borrowed["inKey"] is False and borrowed["diatonic"] is False
+                and built["diatonicCount"] == 3)
+        print(f"{'✅' if good else '❌'} A minor i iv V7 i -> {built['symbols']} "
+              f"V7 inKey {borrowed['inKey']} diatonicCount {built['diatonicCount']}")
+        ok = ok and good
+        # fully diminished vii is borrowed in a major key, half-diminished is the diatonic one
+        dim = build_roman("C major", ["vii°7"])["chords"][0]
+        half = build_roman("C major", ["viiø7"])["chords"][0]
+        good = (dim["notes"] == ["B", "D", "F", "Ab"] and dim["inKey"] is False
+                and half["notes"] == ["B", "D", "F", "A"] and half["diatonic"] is True)
+        print(f"{'✅' if good else '❌'} vii°7 {dim['notes']} inKey {dim['inKey']} | "
+              f"viiø7 {half['notes']} diatonic {half['diatonic']}")
+        ok = ok and good
+        # quality override resolves the I6 collision (added sixth vs first inversion)
+        built = build_roman("C major", ["I"], ["6"])
+        good = built["symbols"] == "C6" and built["chords"][0]["roman"] == "I6"
+        print(f"{'✅' if good else '❌'} C major I with quality 6 -> {built['symbols']} "
+              f"(roman {built['chords'][0]['roman']}: the collision is real)")
+        ok = ok and good
+        # round trip: building then analyzing must return the same numerals and symbols
+        for key_spec, numerals, qualities in ROMAN_BUILD_CASES:
+            built = build_roman(key_spec, numerals, qualities)
+            back = analyze_roman(key_spec, built["symbols"].split())
+            if back is None or back["progression"] != built["progression"]:
+                print(f"❌ round trip {key_spec} {' '.join(numerals)} -> "
+                      f"{back['progression'] if back else None} != {built['progression']}")
+                good = False
+                break
+            if back["diatonicCount"] != built["diatonicCount"]:
+                print(f"❌ round trip {key_spec} {' '.join(numerals)} diatonicCount drift")
+                good = False
+                break
+        else:
+            print(f"✅ round trip holds for all {len(ROMAN_BUILD_CASES)} build cases")
+        ok = ok and good
+        # unknown / unsupported numerals are refused rather than guessed
+        refused = []
+        for junk in ["V/V", "vI", "VIII", "Ix", ""]:
+            try:
+                parse_numeral(junk)
+                refused.append(None)
+            except ValueError:
+                refused.append(junk)
+        good = refused == ["V/V", "vI", "VIII", "Ix", ""]
+        print(f"{'✅' if good else '❌'} rejected numerals: {refused}")
+        ok = ok and good
+        # a figure that cannot exist on the requested chord shape is refused too
+        try:
+            build_roman("C major", ["I64"], ["5"])
+            refused_figure = None
+        except ValueError:
+            refused_figure = "I64 over a 5 chord"
+        good = refused_figure is not None
+        print(f"{'✅' if good else '❌'} second-inversion figure on a two-note chord -> {refused_figure}")
+        ok = ok and good
 
         return 0 if ok else 1
 
@@ -960,6 +1177,22 @@ def main(argv: list[str]) -> int:
             print(f"  {c['symbol']:<6} degree {c['degree']} accidental {c['accidental']} "
                   f"roman {c['roman']:<8} inKey {c['inKey']} diatonic {c['diatonic']} "
                   f"triad {c['keyTriad']:<4} notes {' '.join(c['notes'])}{extra}")
+    print()
+    print("=" * 72)
+    print("progression_build anchors (v0.6.0)")
+    print("=" * 72)
+    for key, numerals, qualities in ROMAN_BUILD_CASES:
+        built = build_roman(key, numerals, qualities)
+        label = " ".join(numerals) if qualities is None else f"{' '.join(numerals)} qualities={' '.join(qualities)}"
+        print(f"\n{key}: {label} -> {built['symbols']}  (numerals {built['progression']}, "
+              f"diatonicCount {built['diatonicCount']})")
+        for c in built["chords"]:
+            extra = ""
+            if "inversion" in c:
+                extra = f" inversion {c['inversion']} bass {c['bass']} figure {c['figure']}"
+            print(f"  {c['numeral']:<6} symbol {c['symbol']:<8} roman {c['roman']:<8} "
+                  f"quality {c['quality']:<5} root {c['root']:<3} notes {' '.join(c['notes']):<12} "
+                  f"inKey {c['inKey']} diatonic {c['diatonic']} keyTriad {c['keyTriad']}{extra}")
     print()
     print("=" * 72)
     print("legacy anchors (test/music.test.ts)")

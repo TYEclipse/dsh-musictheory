@@ -1,12 +1,12 @@
 /**
- * Tool definitions for dsh-musictheory: twelve deterministic music-theory tools
+ * Tool definitions for dsh-musictheory: thirteen deterministic music-theory tools
  * exposed to every agent via defineTool. Strict JSON-schema parameter surfaces,
  * explicit result interfaces matching the inferred output types.
  *
  * @module dsh-musictheory/tools
  */
 import { type ToolDefinition } from '@deepseek-ai/dsh-tools';
-import { type ChordCandidate, type HarmonyChord, type KeyMode, type NoteData, type RomanChord, type ScaleCandidate } from './core.ts';
+import { type BuiltRomanChord, type ChordCandidate, type HarmonyChord, type KeyMode, type NoteData, type RomanChord, type ScaleCandidate } from './core.ts';
 import type { ResolvedConfig } from './index.ts';
 /** How many chord readings `chord_identify` returns before it truncates. */
 export declare const CANDIDATE_LIMIT = 12;
@@ -23,6 +23,7 @@ export interface ToolSet {
     scale_identify: ToolDefinition;
     key_signature: ToolDefinition;
     roman_numeral: ToolDefinition;
+    progression_build: ToolDefinition;
 }
 export interface NoteInfoResult {
     valid: boolean;
@@ -153,6 +154,18 @@ export interface RomanNumeralResult {
     modeAssumed?: boolean;
     error?: string;
 }
-/** Build all ten tool definitions from the resolved config. */
+export interface ProgressionBuildResult {
+    valid: boolean;
+    key?: string;
+    mode?: KeyMode;
+    fifths?: number;
+    progression?: string;
+    symbols?: string;
+    chords?: BuiltRomanChord[];
+    diatonicCount?: number;
+    modeAssumed?: boolean;
+    error?: string;
+}
+/** Build all thirteen tool definitions from the resolved config. */
 export declare function buildMusicTools(config: ResolvedConfig): ToolSet;
 //# sourceMappingURL=tools.d.ts.map

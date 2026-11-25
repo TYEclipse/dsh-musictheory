@@ -1,7 +1,7 @@
 {
   "name": "dsh-musictheory",
-  "version": "0.5.0",
-  "description": "Music theory math toolbox for DeepSeek Harness (dsh): note parsing, frequency/MIDI conversion, correctly spelled chords (26 qualities) and scales (17 types), interval build/identify, scale harmonisation, spelling-aware transposition, chord identification with inversions, scale identification from played notes, key signatures (circle of fifths, relative/parallel/enharmonic keys) and roman-numeral analysis of chord progressions — zero runtime dependencies",
+  "version": "0.6.0",
+  "description": "Music theory math toolbox for DeepSeek Harness (dsh): note parsing, frequency/MIDI conversion, correctly spelled chords (26 qualities) and scales (17 types), interval build/identify, scale harmonisation, spelling-aware transposition, chord identification with inversions, scale identification from played notes, key signatures (circle of fifths, relative/parallel/enharmonic keys), roman-numeral analysis of chord progressions and building a progression from roman numerals back into spelled chords — zero runtime dependencies",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
